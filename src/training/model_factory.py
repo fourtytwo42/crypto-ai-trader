@@ -75,6 +75,13 @@ def create_model(
     use_quantiles = config.horizon == 1
     quantile_loss = QuantileLoss(q=torch.tensor(config.quantiles)) if use_quantiles else None
     base_loss = MAE() if not use_quantiles else None
+    use_gpu = config.device == "cuda" and torch.cuda.is_available()
+    trainer_kwargs = {
+        "enable_progress_bar": False,
+        "callbacks": [EpochProgressCallback(config.epochs)],
+        "accelerator": "gpu" if use_gpu else "cpu",
+        "devices": 1,
+    }
 
     if config.model_type == "patchtst":
         model = PatchTST(
@@ -87,8 +94,7 @@ def create_model(
             learning_rate=config.learning_rate,
             batch_size=config.batch_size,
             max_steps=config.epochs,
-            enable_progress_bar=False,
-            callbacks=[EpochProgressCallback(config.epochs)],
+            **trainer_kwargs,
             loss=quantile_loss or base_loss,
             valid_loss=quantile_loss or base_loss,
         )
@@ -100,8 +106,7 @@ def create_model(
             learning_rate=config.learning_rate,
             batch_size=config.batch_size,
             max_steps=config.epochs,
-            enable_progress_bar=False,
-            callbacks=[EpochProgressCallback(config.epochs)],
+            **trainer_kwargs,
             loss=quantile_loss or base_loss,
             valid_loss=quantile_loss or base_loss,
         )

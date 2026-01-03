@@ -50,3 +50,17 @@ with Session() as session:
     print(result.metrics)
 PY
 ```
+
+Optimize model accuracy (12-candle horizon):
+```
+./venv/bin/python -m src.backtest.optimizer
+```
+
+Notes:
+- Set `TrainingConfig(device="cuda")` to use GPU (RTX 3090) if available; it will
+  fall back to CPU when CUDA is not present.
+- The optimizer evaluates forecast accuracy (MAE/RMSE/MAPE) against `target_return`,
+  which is `return` shifted by the forecast horizon.
+- Progress logs show backtest windows, running average metrics, and per-config results.
+- Training artifacts are only saved for explicit training runs; backtests do not
+  overwrite existing models.
