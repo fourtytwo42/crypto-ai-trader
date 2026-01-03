@@ -217,6 +217,49 @@ class DataPipeline:
             self.session.rollback()
             raise PipelineError(f"Failed to load KuCoin candles: {e}") from e
 
+    def load_kucoin_hourly_to_database(
+        self,
+        symbol: str = "BTC-USDT",
+        hours_back: int = 8760,  # 1 year of hourly data (365 * 24)
+        replace_existing: bool = False,
+    ) -> int:
+        """Load hourly KuCoin data for sub-daily predictions.
+
+        Fetches hourly candle data from KuCoin for use with shorter
+        prediction horizons (6-8 hours).
+
+        Args:
+            symbol: KuCoin symbol (default: BTC-USDT).
+            hours_back: Number of hours to backfill (default: 8760 = 1 year).
+            replace_existing: If True, delete existing candles first.
+
+        Returns:
+            Number of candles loaded.
+
+        Raises:
+            PipelineError: If loading fails.
+        """
+        import time
+
+        end_at = int(time.time())
+        start_at = end_at - (hours_back * 3600)
+
+        logger.info(
+            "Loading hourly KuCoin data",
+            symbol=symbol,
+            hours_back=hours_back,
+            start_at=start_at,
+            end_at=end_at,
+        )
+
+        return self.load_kucoin_to_database(
+            symbol=symbol,
+            timeframe="1hour",
+            start_at=start_at,
+            end_at=end_at,
+            replace_existing=replace_existing,
+        )
+
     def run_full_pipeline(
         self,
         file_path: str | Path,

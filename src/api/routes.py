@@ -32,7 +32,14 @@ from src.database.operations import (
 )
 from src.prediction.model_loader import load_model_artifacts
 from src.prediction.predictor import generate_predictions
-from src.prediction.signal_generator import generate_signal
+from src.prediction.signal_generator import (
+    SignalConfig,
+    calculate_conviction,
+    calculate_effective_threshold,
+    calculate_uncertainty_spread,
+    generate_signal,
+    generate_signal_with_position_size,
+)
 
 router = APIRouter()
 
@@ -110,10 +117,45 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)) -> 
 
     predictions = generate_predictions(bundle.model, data)
     latest = predictions[-1]
-    signal = generate_signal(
-        {"q10": latest["q10"], "q50": latest["q50"], "q90": latest["q90"]},
-        threshold=request.threshold,
+
+    # Build enhanced signal config from request
+    signal_config = SignalConfig(
+        base_threshold=request.threshold,
+        volatility_adaptive=request.volatility_adaptive,
+        baseline_volatility=0.02,  # Default baseline
+        uncertainty_enabled=True,
+        max_uncertainty_spread=request.max_uncertainty_spread,
     )
+
+    prediction_dict = {"q10": latest["q10"], "q50": latest["q50"], "q90": latest["q90"]}
+
+    # Generate signal (with optional position sizing)
+    position_size: float | None = None
+    if request.include_position_size:
+        signal, position_size = generate_signal_with_position_size(
+            prediction_dict,
+            threshold=request.threshold,
+            current_volatility=request.current_volatility,
+            config=signal_config,
+        )
+    else:
+        signal = generate_signal(
+            prediction_dict,
+            threshold=request.threshold,
+            current_volatility=request.current_volatility,
+            config=signal_config,
+        )
+
+    # Calculate enhanced metrics for response
+    uncertainty_spread = calculate_uncertainty_spread(prediction_dict)
+    conviction = calculate_conviction(prediction_dict)
+    effective_threshold: float | None = None
+    if request.volatility_adaptive and request.current_volatility is not None:
+        effective_threshold = calculate_effective_threshold(
+            request.threshold,
+            request.current_volatility,
+            0.02,  # baseline
+        )
 
     prediction_timestamp = datetime.now(tz=timezone.utc)
     create_prediction(
@@ -138,6 +180,10 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)) -> 
         prediction_timestamp=prediction_timestamp,
         timestamp=latest["timestamp"],
         confidence=confidence,
+        effective_threshold=effective_threshold,
+        uncertainty_spread=uncertainty_spread,
+        position_size=position_size,
+        conviction=conviction,
     )
 
 

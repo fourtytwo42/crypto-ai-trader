@@ -68,6 +68,7 @@ def create_model(
         from neuralforecast.models import NHITS, PatchTST
         from neuralforecast.losses.pytorch import MAE, QuantileLoss
         import torch
+        from src.training.progress import EpochProgressCallback
     except Exception:
         return SimpleQuantileModel(quantiles=config.quantiles)
 
@@ -86,6 +87,8 @@ def create_model(
             learning_rate=config.learning_rate,
             batch_size=config.batch_size,
             max_steps=config.epochs,
+            enable_progress_bar=False,
+            callbacks=[EpochProgressCallback(config.epochs)],
             loss=quantile_loss or base_loss,
             valid_loss=quantile_loss or base_loss,
         )
@@ -97,6 +100,8 @@ def create_model(
             learning_rate=config.learning_rate,
             batch_size=config.batch_size,
             max_steps=config.epochs,
+            enable_progress_bar=False,
+            callbacks=[EpochProgressCallback(config.epochs)],
             loss=quantile_loss or base_loss,
             valid_loss=quantile_loss or base_loss,
         )

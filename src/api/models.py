@@ -10,9 +10,23 @@ from pydantic import BaseModel, Field
 
 class PredictionRequest(BaseModel):
     model_id: int = Field(..., description="Model ID to use")
-    threshold: float = Field(0.005, ge=0, le=0.1)
+    threshold: float = Field(0.005, ge=0, le=0.1, description="Base signal threshold")
     use_latest: bool = Field(True, description="Use latest data")
     data: dict[str, Any] | None = Field(None, description="Custom feature data")
+
+    # Enhanced signal generation options
+    volatility_adaptive: bool = Field(
+        True, description="Enable volatility-adaptive threshold scaling"
+    )
+    current_volatility: float | None = Field(
+        None, ge=0, description="Current volatility for adaptive threshold"
+    )
+    max_uncertainty_spread: float = Field(
+        0.03, ge=0.005, le=0.1, description="Max q90-q10 spread before going flat"
+    )
+    include_position_size: bool = Field(
+        False, description="Include position size in response based on conviction"
+    )
 
 
 class QuantilePrediction(BaseModel):
@@ -30,6 +44,20 @@ class PredictionResponse(BaseModel):
     prediction_timestamp: datetime
     timestamp: datetime
     confidence: float = Field(..., ge=0, le=1)
+
+    # Enhanced signal information
+    effective_threshold: float | None = Field(
+        None, description="Volatility-adjusted threshold actually used"
+    )
+    uncertainty_spread: float | None = Field(
+        None, description="Prediction uncertainty (q90 - q10)"
+    )
+    position_size: float | None = Field(
+        None, ge=0, le=1, description="Suggested position size based on conviction"
+    )
+    conviction: float | None = Field(
+        None, ge=0, le=1, description="Signal conviction score (|q50| / spread)"
+    )
 
 
 class ModelInfo(BaseModel):

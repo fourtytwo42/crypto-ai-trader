@@ -68,9 +68,54 @@ class Settings(BaseSettings):
     )
     model_stride: int = Field(default=8, ge=1, le=32, description="Stride for PatchTST")
 
-    # Signal Generation
+    # Signal Generation - Base
     signal_threshold: float = Field(
-        default=0.005, ge=0.001, le=0.05, description="Signal threshold (0.5% default)"
+        default=0.005, ge=0.001, le=0.05, description="Base signal threshold (0.5% default)"
+    )
+
+    # Signal Generation - Volatility Adaptive
+    signal_volatility_adaptive: bool = Field(
+        default=True, description="Enable volatility-adaptive threshold scaling"
+    )
+    signal_baseline_volatility: float = Field(
+        default=0.02,
+        ge=0.005,
+        le=0.1,
+        description="Baseline volatility for threshold scaling (~2% daily)",
+    )
+    signal_volatility_multiplier_min: float = Field(
+        default=0.5, ge=0.1, le=1.0, description="Minimum volatility multiplier"
+    )
+    signal_volatility_multiplier_max: float = Field(
+        default=2.0, ge=1.0, le=5.0, description="Maximum volatility multiplier"
+    )
+    signal_volatility_window: Literal["ret_std_7", "ret_std_30"] = Field(
+        default="ret_std_7", description="Volatility column to use for adaptive threshold"
+    )
+
+    # Signal Generation - Uncertainty Band
+    signal_uncertainty_enabled: bool = Field(
+        default=True, description="Enable uncertainty-based no-trade band"
+    )
+    signal_max_uncertainty_spread: float = Field(
+        default=0.03,
+        ge=0.005,
+        le=0.1,
+        description="Maximum q90-q10 spread before going flat",
+    )
+
+    # Position Management
+    min_holding_periods: int = Field(
+        default=1, ge=0, le=24, description="Minimum holding periods to avoid overtrading"
+    )
+    position_sizing_enabled: bool = Field(
+        default=False, description="Enable dynamic position sizing based on conviction"
+    )
+    position_max_size: float = Field(
+        default=1.0, ge=0.1, le=1.0, description="Maximum position size as fraction"
+    )
+    position_min_size: float = Field(
+        default=0.1, ge=0.01, le=0.5, description="Minimum position size as fraction"
     )
 
     # Backtesting Configuration

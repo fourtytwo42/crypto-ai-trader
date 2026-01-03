@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import pickle
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,35 @@ class TrainingResult:
     scaler_path: Path | None
 
 
+def _is_existing_better(existing: dict[str, float], new: dict[str, float]) -> bool:
+    """Return True if existing metrics are better than new metrics."""
+    for key in ("mae", "rmse", "mape"):
+        if key in existing and key in new:
+            return existing[key] <= new[key]
+    return False
+
+
+def _select_model_dir(model_dir: str | Path, metrics: dict[str, float], keep_best: bool) -> Path:
+    model_dir = Path(model_dir)
+    if not keep_best:
+        return model_dir
+
+    metadata_path = model_dir / "metadata.json"
+    if not metadata_path.exists():
+        return model_dir
+
+    try:
+        existing_metrics = json.loads(metadata_path.read_text()).get("metrics", {})
+    except Exception:
+        return model_dir
+
+    if _is_existing_better(existing_metrics, metrics):
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        return model_dir / "runs" / timestamp
+
+    return model_dir
+
+
 def _prepare_target(train_df: pd.DataFrame, target_col: str) -> np.ndarray:
     if target_col not in train_df.columns:
         raise ValueError(f"missing target column: {target_col}")
@@ -44,6 +74,8 @@ def train_model(
     force_simple: bool = False,
     scaler: object | None = None,
     feature_cols: list[str] | None = None,
+    save_artifacts: bool = True,
+    keep_best: bool = False,
 ) -> TrainingResult:
     """Train a model and persist artifacts.
 
@@ -86,9 +118,17 @@ def train_model(
             y_pred = y_pred[:min_len]
         metrics = calculate_metrics(y_true, y_pred)
 
-    model_path, metadata_path = save_model_artifacts(
-        model, config, metrics, model_dir=model_dir, scaler=scaler
-    )
+    model_path = Path(model_dir) / "model.pt"
+    metadata_path = Path(model_dir) / "metadata.json"
+    if save_artifacts:
+        model_path, metadata_path = save_model_artifacts(
+            model,
+            config,
+            metrics,
+            model_dir=model_dir,
+            scaler=scaler,
+            keep_best=keep_best,
+        )
 
     return TrainingResult(
         model=model,
@@ -105,9 +145,10 @@ def save_model_artifacts(
     metrics: dict[str, float],
     model_dir: str | Path,
     scaler: object | None = None,
+    keep_best: bool = False,
 ) -> tuple[Path, Path]:
     """Save model and metadata to disk."""
-    model_dir = Path(model_dir)
+    model_dir = _select_model_dir(model_dir, metrics, keep_best)
     model_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = model_dir / "model.pt"

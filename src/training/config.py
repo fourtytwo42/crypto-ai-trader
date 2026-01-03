@@ -9,13 +9,16 @@ from typing import Literal
 ModelType = Literal["patchtst", "nhits"]
 
 
+DataFrequency = Literal["1day", "1hour", "4hour", "6hour", "8hour"]
+
+
 @dataclass
 class TrainingConfig:
     """Configuration for model training."""
 
     model_type: ModelType = "patchtst"
     context_length: int = 128
-    horizon: int = 1
+    horizon: int = 1  # Prediction horizon in periods (days for daily, hours for hourly)
     hidden_size: int = 512
     num_layers: int = 6
     patch_length: int = 16
@@ -24,8 +27,9 @@ class TrainingConfig:
     batch_size: int = 32
     epochs: int = 100
     device: str = "cuda"
-    freq: str = "H"
+    freq: str = "H"  # NeuralForecast frequency: "D" for daily, "H" for hourly
     quantiles: list[float] = field(default_factory=lambda: [0.1, 0.5, 0.9])
+    data_frequency: DataFrequency = "1day"  # KuCoin timeframe for data fetching
 
     def to_dict(self) -> dict[str, float | int | str | list[float]]:
         """Convert config to a JSON-serializable dict."""
@@ -43,6 +47,7 @@ class TrainingConfig:
             "device": self.device,
             "freq": self.freq,
             "quantiles": list(self.quantiles),
+            "data_frequency": self.data_frequency,
         }
 
     def validate(self) -> None:
@@ -59,3 +64,6 @@ class TrainingConfig:
             raise ValueError("quantiles must be sorted")
         if not self.freq:
             raise ValueError("freq must be non-empty")
+        valid_frequencies = {"1day", "1hour", "4hour", "6hour", "8hour"}
+        if self.data_frequency not in valid_frequencies:
+            raise ValueError(f"data_frequency must be one of {valid_frequencies}")
