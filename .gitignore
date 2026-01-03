@@ -65,3 +65,34 @@ coverage/
 tmp/
 temp/
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Python testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ML/AI models and artifacts (too large for git)
+models/*.pt
+models/**/*.pt
+*.pkl
+*.h5
+*.ckpt
+lightning_logs/
+wandb/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3

@@ -6,6 +6,13 @@ An intelligent cryptocurrency trading system powered by artificial intelligence.
 
 Crypto AI Trader is a sophisticated trading platform that leverages AI and machine learning algorithms to analyze market trends, identify trading opportunities, and execute trades across multiple cryptocurrency exchanges.
 
+## Documentation
+
+- docs/README.md
+- docs/postgres-setup.md
+- docs/kucoin-backfill.md
+- docs/training-workflow.md
+
 ## Features
 
 - AI-powered market analysis
@@ -74,4 +81,3 @@ MIT
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
