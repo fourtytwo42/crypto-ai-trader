@@ -73,9 +73,14 @@ def create_model(
         return SimpleQuantileModel(quantiles=config.quantiles)
 
     use_quantiles = config.horizon == 1
-    quantile_loss = QuantileLoss(q=torch.tensor(config.quantiles)) if use_quantiles else None
+    loss_device = "cuda" if config.device == "cuda" and torch.cuda.is_available() else "cpu"
+    quantile_loss = (
+        QuantileLoss(q=torch.tensor(config.quantiles, device=loss_device))
+        if use_quantiles
+        else None
+    )
     base_loss = MAE() if not use_quantiles else None
-    use_gpu = config.device == "cuda" and torch.cuda.is_available()
+    use_gpu = loss_device == "cuda"
     trainer_kwargs = {
         "enable_progress_bar": False,
         "callbacks": [EpochProgressCallback(config.epochs)],

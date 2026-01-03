@@ -13,7 +13,11 @@ import structlog
 from sqlalchemy.orm import Session
 
 from src.data.csv_loader import load_kraken_csv
-from src.data.feature_extractor import extract_features, get_feature_columns
+from src.data.feature_extractor import (
+    extract_features,
+    extract_features_hourly,
+    get_feature_columns,
+)
 from src.data.kucoin_client import backfill_kucoin_candles
 from src.data.normalizer import RollingNormalizer
 from src.database.operations import (
@@ -124,8 +128,14 @@ class DataPipeline:
                 "volume": float(c.volume),
             } for c in candles])
 
-            # Extract features
-            features_df = extract_features(df, drop_na=True)
+            # Extract features (use hourly windows when data cadence is hourly)
+            timestamps = pd.to_datetime(df["timestamp"], utc=True).sort_values()
+            median_delta = timestamps.diff().median()
+            is_hourly = bool(median_delta is not pd.NaT and median_delta <= pd.Timedelta(hours=2))
+            if is_hourly:
+                features_df = extract_features_hourly(df, drop_na=True, daily_equivalent=True)
+            else:
+                features_df = extract_features(df, drop_na=True)
 
             # Store features
             count = 0
@@ -197,13 +207,31 @@ class DataPipeline:
                 if existing:
                     continue
 
+                open_price = float(candle.open)
+                high = float(candle.high)
+                low = float(candle.low)
+                close = float(candle.close)
+                corrected_high = max(high, open_price, close, low)
+                corrected_low = min(low, open_price, close, high)
+                if corrected_high != high or corrected_low != low:
+                    logger.debug(
+                        "Corrected KuCoin candle bounds",
+                        timestamp=ts,
+                        high=high,
+                        low=low,
+                        corrected_high=corrected_high,
+                        corrected_low=corrected_low,
+                    )
+                    high = corrected_high
+                    low = corrected_low
+
                 create_candle(
                     self.session,
                     timestamp=ts,
-                    open_price=Decimal(str(candle.open)),
-                    high=Decimal(str(candle.high)),
-                    low=Decimal(str(candle.low)),
-                    close=Decimal(str(candle.close)),
+                    open_price=Decimal(str(open_price)),
+                    high=Decimal(str(high)),
+                    low=Decimal(str(low)),
+                    close=Decimal(str(close)),
                     volume=Decimal(str(candle.volume)),
                     trades=None,
                 )

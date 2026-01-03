@@ -41,6 +41,10 @@ def train_command(model_dir: str | None = None) -> dict[str, float]:
     if features_df.empty:
         raise ValueError("no features available for training")
 
+    features_df = features_df.dropna().reset_index(drop=True)
+    if features_df.empty:
+        raise ValueError("no clean rows available after dropping missing values")
+
     config = TrainingConfig(model_type="patchtst", device=settings.train_device)
     splits = features_df.iloc[:-10], features_df.iloc[-10:]
     result = train_model(
@@ -130,7 +134,7 @@ def backtest_command(
     uncertainty_enabled: bool = True,
     max_uncertainty_spread: float = 0.03,
     min_holding_periods: int = 1,
-    horizon: int = 1,
+    horizon: int = 12,
 ) -> dict[str, float]:
     """Run a walk-forward backtest with enhanced signal generation.
 
@@ -158,6 +162,10 @@ def backtest_command(
         data = features_df
 
     data = data.dropna().reset_index(drop=True)
+    if horizon > 1:
+        data = data.copy()
+        data["target_return"] = data["return"].shift(-horizon)
+        data = data.dropna().reset_index(drop=True)
 
     # Build backtest config with enhanced options
     backtest_config = BacktestConfig(
@@ -169,15 +177,21 @@ def backtest_command(
         min_holding_periods=min_holding_periods,
     )
 
+    train_size = settings.backtest_train_window
+    test_size = settings.backtest_test_window
+    val_size = max(int(train_size * settings.train_validation_split), 30)
+    step_size = max(test_size // 2, 30)
+
     result = walk_forward_backtest(
         data,
         config,
-        train_size=20,
-        val_size=5,
-        test_size=5,
-        step_size=5,
+        train_size=train_size,
+        val_size=val_size,
+        test_size=test_size,
+        step_size=step_size,
         model_dir=model_dir,
         backtest_config=backtest_config,
+        purge=settings.walk_forward_purge_days,
     )
     return result.aggregated
 
