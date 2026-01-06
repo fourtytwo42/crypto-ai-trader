@@ -28,7 +28,10 @@ class TrainingConfig:
     epochs: int = 100
     device: str = "cuda"
     freq: str = "H"  # NeuralForecast frequency: "D" for daily, "H" for hourly
+    max_vram_gb: float | None = 23.0
     quantiles: list[float] = field(default_factory=lambda: [0.1, 0.5, 0.9])
+    horizon_weight: list[float] | None = None
+    loss_type: str = "mae"
     data_frequency: DataFrequency = "1day"  # KuCoin timeframe for data fetching
 
     def to_dict(self) -> dict[str, float | int | str | list[float]]:
@@ -46,7 +49,10 @@ class TrainingConfig:
             "epochs": self.epochs,
             "device": self.device,
             "freq": self.freq,
+            "max_vram_gb": self.max_vram_gb,
             "quantiles": list(self.quantiles),
+            "horizon_weight": list(self.horizon_weight) if self.horizon_weight else None,
+            "loss_type": self.loss_type,
             "data_frequency": self.data_frequency,
         }
 
@@ -64,6 +70,12 @@ class TrainingConfig:
             raise ValueError("quantiles must be sorted")
         if not self.freq:
             raise ValueError("freq must be non-empty")
+        if self.max_vram_gb is not None and self.max_vram_gb <= 0:
+            raise ValueError("max_vram_gb must be positive when set")
         valid_frequencies = {"1day", "1hour", "4hour", "6hour", "8hour"}
         if self.data_frequency not in valid_frequencies:
             raise ValueError(f"data_frequency must be one of {valid_frequencies}")
+        if self.horizon_weight is not None and len(self.horizon_weight) != self.horizon:
+            raise ValueError("horizon_weight length must match horizon")
+        if self.loss_type not in {"mae", "huber"}:
+            raise ValueError("loss_type must be 'mae' or 'huber'")

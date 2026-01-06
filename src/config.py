@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # Data Storage
     data_dir: Path = Field(default=Path("data"), description="Directory for data files")
+    data_symbol: str = Field(default="BTC-USDT", description="Default trading pair symbol")
 
     # API Configuration
     api_host: str = Field(default="0.0.0.0", description="API server host")

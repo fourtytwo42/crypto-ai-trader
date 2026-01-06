@@ -37,8 +37,9 @@ class Candle(Base):
     __tablename__ = "candles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, default="BTC-USDT")
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, unique=True
+        DateTime(timezone=True), nullable=False
     )
     open: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     high: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
@@ -56,6 +57,8 @@ class Candle(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("symbol", "timestamp", name="uq_candles_symbol_timestamp"),
+        Index("idx_candles_symbol_timestamp", "symbol", "timestamp"),
         Index("idx_candles_timestamp", "timestamp"),
         Index("idx_candles_created_at", "created_at"),
     )
@@ -84,8 +87,9 @@ class Feature(Base):
     candle_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("candles.id", ondelete="CASCADE"), nullable=False
     )
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, default="BTC-USDT")
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, unique=True
+        DateTime(timezone=True), nullable=False
     )
 
     # Scale-free features
@@ -110,6 +114,8 @@ class Feature(Base):
     candle: Mapped["Candle"] = relationship("Candle", back_populates="features")
 
     __table_args__ = (
+        UniqueConstraint("symbol", "timestamp", name="uq_features_symbol_timestamp"),
+        Index("idx_features_symbol_timestamp", "symbol", "timestamp"),
         Index("idx_features_timestamp", "timestamp"),
         Index("idx_features_candle_id", "candle_id"),
     )

@@ -27,6 +27,7 @@ logger = structlog.get_logger(__name__)
 # Candle Operations
 def create_candle(
     session: Session,
+    symbol: str,
     timestamp: datetime,
     open_price: Decimal,
     high: Decimal,
@@ -51,6 +52,7 @@ def create_candle(
         Created candle.
     """
     candle = Candle(
+        symbol=symbol,
         timestamp=timestamp,
         open=open_price,
         high=high,
@@ -65,7 +67,11 @@ def create_candle(
     return candle
 
 
-def get_candle_by_timestamp(session: Session, timestamp: datetime) -> Candle | None:
+def get_candle_by_timestamp(
+    session: Session,
+    timestamp: datetime,
+    symbol: str | None = None,
+) -> Candle | None:
     """Get candle by timestamp.
 
     Args:
@@ -76,11 +82,16 @@ def get_candle_by_timestamp(session: Session, timestamp: datetime) -> Candle | N
         Candle if found, None otherwise.
     """
     stmt = select(Candle).where(Candle.timestamp == timestamp)
+    if symbol is not None:
+        stmt = stmt.where(Candle.symbol == symbol)
     return session.execute(stmt).scalar_one_or_none()
 
 
 def get_candles_in_range(
-    session: Session, start: datetime, end: datetime
+    session: Session,
+    start: datetime,
+    end: datetime,
+    symbol: str | None = None,
 ) -> list[Candle]:
     """Get candles in date range.
 
@@ -92,16 +103,18 @@ def get_candles_in_range(
     Returns:
         List of candles ordered by timestamp.
     """
-    stmt = (
-        select(Candle)
-        .where(Candle.timestamp >= start)
-        .where(Candle.timestamp <= end)
-        .order_by(Candle.timestamp)
-    )
+    stmt = select(Candle).where(Candle.timestamp >= start).where(Candle.timestamp <= end)
+    if symbol is not None:
+        stmt = stmt.where(Candle.symbol == symbol)
+    stmt = stmt.order_by(Candle.timestamp)
     return list(session.execute(stmt).scalars().all())
 
 
-def get_latest_candles(session: Session, limit: int = 100) -> list[Candle]:
+def get_latest_candles(
+    session: Session,
+    limit: int = 100,
+    symbol: str | None = None,
+) -> list[Candle]:
     """Get latest candles.
 
     Args:
@@ -111,11 +124,14 @@ def get_latest_candles(session: Session, limit: int = 100) -> list[Candle]:
     Returns:
         List of candles ordered by timestamp descending.
     """
-    stmt = select(Candle).order_by(Candle.timestamp.desc()).limit(limit)
+    stmt = select(Candle)
+    if symbol is not None:
+        stmt = stmt.where(Candle.symbol == symbol)
+    stmt = stmt.order_by(Candle.timestamp.desc()).limit(limit)
     return list(session.execute(stmt).scalars().all())
 
 
-def get_all_candles(session: Session) -> list[Candle]:
+def get_all_candles(session: Session, symbol: str | None = None) -> list[Candle]:
     """Get all candles ordered by timestamp.
 
     Args:
@@ -124,8 +140,17 @@ def get_all_candles(session: Session) -> list[Candle]:
     Returns:
         List of all candles.
     """
-    stmt = select(Candle).order_by(Candle.timestamp)
+    stmt = select(Candle)
+    if symbol is not None:
+        stmt = stmt.where(Candle.symbol == symbol)
+    stmt = stmt.order_by(Candle.timestamp)
     return list(session.execute(stmt).scalars().all())
+
+
+def get_available_symbols(session: Session) -> list[str]:
+    """List distinct symbols available in candles."""
+    stmt = select(Candle.symbol).distinct().order_by(Candle.symbol)
+    return [row[0] for row in session.execute(stmt).all()]
 
 
 def count_candles(session: Session) -> int:
@@ -163,6 +188,7 @@ def delete_all_candles(session: Session) -> int:
 def create_feature(
     session: Session,
     candle_id: int,
+    symbol: str,
     timestamp: datetime,
     return_: Decimal | None = None,
     range_: Decimal | None = None,
@@ -193,6 +219,7 @@ def create_feature(
     """
     feature = Feature(
         candle_id=candle_id,
+        symbol=symbol,
         timestamp=timestamp,
         return_=return_,
         range=range_,
@@ -210,7 +237,10 @@ def create_feature(
 
 
 def get_features_in_range(
-    session: Session, start: datetime, end: datetime
+    session: Session,
+    start: datetime,
+    end: datetime,
+    symbol: str | None = None,
 ) -> list[Feature]:
     """Get features in date range.
 
@@ -222,16 +252,30 @@ def get_features_in_range(
     Returns:
         List of features ordered by timestamp.
     """
-    stmt = (
-        select(Feature)
-        .where(Feature.timestamp >= start)
-        .where(Feature.timestamp <= end)
-        .order_by(Feature.timestamp)
-    )
+    stmt = select(Feature).where(Feature.timestamp >= start).where(Feature.timestamp <= end)
+    if symbol is not None:
+        stmt = stmt.where(Feature.symbol == symbol)
+    stmt = stmt.order_by(Feature.timestamp)
     return list(session.execute(stmt).scalars().all())
 
 
-def get_latest_features(session: Session, limit: int = 100) -> list[Feature]:
+def get_feature_by_timestamp(
+    session: Session,
+    timestamp: datetime,
+    symbol: str | None = None,
+) -> Feature | None:
+    """Get feature by timestamp and optional symbol."""
+    stmt = select(Feature).where(Feature.timestamp == timestamp)
+    if symbol is not None:
+        stmt = stmt.where(Feature.symbol == symbol)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def get_latest_features(
+    session: Session,
+    limit: int = 100,
+    symbol: str | None = None,
+) -> list[Feature]:
     """Get latest features.
 
     Args:
@@ -241,7 +285,10 @@ def get_latest_features(session: Session, limit: int = 100) -> list[Feature]:
     Returns:
         List of features ordered by timestamp descending.
     """
-    stmt = select(Feature).order_by(Feature.timestamp.desc()).limit(limit)
+    stmt = select(Feature)
+    if symbol is not None:
+        stmt = stmt.where(Feature.symbol == symbol)
+    stmt = stmt.order_by(Feature.timestamp.desc()).limit(limit)
     return list(session.execute(stmt).scalars().all())
 
 

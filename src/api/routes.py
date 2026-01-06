@@ -18,6 +18,7 @@ from src.api.models import (
     PredictionResponse,
     QuantilePrediction,
 )
+from src.config import get_settings
 from src.database.operations import (
     create_prediction,
     get_all_backtests,
@@ -99,7 +100,8 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)) -> 
     if request.data:
         data = pd.DataFrame([request.data])
     elif request.use_latest:
-        features = get_latest_features(db, limit=1)
+        settings = get_settings()
+        features = get_latest_features(db, limit=1, symbol=settings.data_symbol)
         if not features:
             raise_api_error(400, "FEATURES_NOT_FOUND", "No features available")
         feature = features[0]

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import structlog
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ from src.database.operations import (
     create_feature,
     delete_all_candles,
     get_candle_by_timestamp,
+    get_feature_by_timestamp,
 )
 
 logger = structlog.get_logger(__name__)
@@ -51,6 +53,7 @@ class DataPipeline:
     def load_csv_to_database(
         self,
         file_path: str | Path,
+        symbol: str,
         replace_existing: bool = False,
     ) -> int:
         """Load CSV file and store candles in database.
@@ -76,12 +79,13 @@ class DataPipeline:
             count = 0
             for _, row in df.iterrows():
                 # Check if candle already exists
-                existing = get_candle_by_timestamp(self.session, row["timestamp"])
+                existing = get_candle_by_timestamp(self.session, row["timestamp"], symbol=symbol)
                 if existing:
                     continue
 
                 create_candle(
                     self.session,
+                    symbol=symbol,
                     timestamp=row["timestamp"],
                     open_price=Decimal(str(row["open"])),
                     high=Decimal(str(row["high"])),
@@ -120,6 +124,7 @@ class DataPipeline:
             # Convert to DataFrame
             df = pd.DataFrame([{
                 "id": c.id,
+                "symbol": c.symbol,
                 "timestamp": c.timestamp,
                 "open": float(c.open),
                 "high": float(c.high),
@@ -128,37 +133,61 @@ class DataPipeline:
                 "volume": float(c.volume),
             } for c in candles])
 
-            # Extract features (use hourly windows when data cadence is hourly)
-            timestamps = pd.to_datetime(df["timestamp"], utc=True).sort_values()
-            median_delta = timestamps.diff().median()
-            is_hourly = bool(median_delta is not pd.NaT and median_delta <= pd.Timedelta(hours=2))
-            if is_hourly:
-                features_df = extract_features_hourly(df, drop_na=True, daily_equivalent=True)
-            else:
-                features_df = extract_features(df, drop_na=True)
-
-            # Store features
+            # Extract features per symbol to avoid mixing assets
             count = 0
-            for _, row in features_df.iterrows():
-                # Find candle ID by matching timestamp
-                candle = get_candle_by_timestamp(self.session, row["timestamp"])
-                if not candle:
-                    continue
-
-                create_feature(
-                    self.session,
-                    candle_id=candle.id,
-                    timestamp=row["timestamp"],
-                    return_=Decimal(str(row["return"])),
-                    range_=Decimal(str(row["range"])),
-                    body=Decimal(str(row["body"])),
-                    dlog_volume=Decimal(str(row["dlog_volume"])),
-                    ret_mean_7=Decimal(str(row["ret_mean_7"])) if pd.notna(row["ret_mean_7"]) else None,
-                    ret_std_7=Decimal(str(row["ret_std_7"])) if pd.notna(row["ret_std_7"]) else None,
-                    ret_mean_30=Decimal(str(row["ret_mean_30"])) if pd.notna(row["ret_mean_30"]) else None,
-                    ret_std_30=Decimal(str(row["ret_std_30"])) if pd.notna(row["ret_std_30"]) else None,
+            for symbol, symbol_df in df.groupby("symbol"):
+                symbol_df = symbol_df.sort_values("timestamp").reset_index(drop=True)
+                timestamps = pd.to_datetime(symbol_df["timestamp"], utc=True).sort_values()
+                median_delta = timestamps.diff().median()
+                is_hourly = bool(
+                    median_delta is not pd.NaT and median_delta <= pd.Timedelta(hours=2)
                 )
-                count += 1
+                if is_hourly:
+                    features_df = extract_features_hourly(
+                        symbol_df, drop_na=True, daily_equivalent=True
+                    )
+                else:
+                    features_df = extract_features(symbol_df, drop_na=True)
+
+                for _, row in features_df.iterrows():
+                    existing_feature = get_feature_by_timestamp(
+                        self.session,
+                        row["timestamp"],
+                        symbol=symbol,
+                    )
+                    if existing_feature:
+                        continue
+                    candle = get_candle_by_timestamp(
+                        self.session,
+                        row["timestamp"],
+                        symbol=symbol,
+                    )
+                    if not candle:
+                        continue
+
+                    create_feature(
+                        self.session,
+                        candle_id=candle.id,
+                        symbol=symbol,
+                        timestamp=row["timestamp"],
+                        return_=Decimal(str(row["return"])),
+                        range_=Decimal(str(row["range"])),
+                        body=Decimal(str(row["body"])),
+                        dlog_volume=Decimal(str(row["dlog_volume"])),
+                        ret_mean_7=Decimal(str(row["ret_mean_7"]))
+                        if pd.notna(row["ret_mean_7"])
+                        else None,
+                        ret_std_7=Decimal(str(row["ret_std_7"]))
+                        if pd.notna(row["ret_std_7"])
+                        else None,
+                        ret_mean_30=Decimal(str(row["ret_mean_30"]))
+                        if pd.notna(row["ret_mean_30"])
+                        else None,
+                        ret_std_30=Decimal(str(row["ret_std_30"]))
+                        if pd.notna(row["ret_std_30"])
+                        else None,
+                    )
+                    count += 1
 
             self.session.commit()
             logger.info("Extracted and stored features", count=count)
@@ -203,7 +232,7 @@ class DataPipeline:
                 end_at=end_at,
             ):
                 ts = datetime.fromtimestamp(candle.timestamp, tz=timezone.utc)
-                existing = get_candle_by_timestamp(self.session, ts)
+                existing = get_candle_by_timestamp(self.session, ts, symbol=symbol)
                 if existing:
                     continue
 
@@ -227,6 +256,7 @@ class DataPipeline:
 
                 create_candle(
                     self.session,
+                    symbol=symbol,
                     timestamp=ts,
                     open_price=Decimal(str(open_price)),
                     high=Decimal(str(high)),
@@ -291,6 +321,7 @@ class DataPipeline:
     def run_full_pipeline(
         self,
         file_path: str | Path,
+        symbol: str,
         replace_existing: bool = False,
     ) -> dict[str, int]:
         """Run complete data pipeline.
@@ -305,7 +336,7 @@ class DataPipeline:
         logger.info("Starting full pipeline", file_path=str(file_path))
 
         # Load candles
-        candle_count = self.load_csv_to_database(file_path, replace_existing)
+        candle_count = self.load_csv_to_database(file_path, symbol, replace_existing)
 
         # Extract features
         feature_count = self.extract_and_store_features()
@@ -324,6 +355,8 @@ def prepare_training_data(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     normalize: bool = True,
+    normalize_cols: list[str] | None = None,
+    symbol: str | None = None,
 ) -> tuple[pd.DataFrame, RollingNormalizer | None]:
     """Prepare data for model training.
 
@@ -337,13 +370,17 @@ def prepare_training_data(
         Tuple of (features DataFrame, normalizer if normalize=True else None).
     """
     from src.database.operations import get_features_in_range, get_all_candles
+    from src.config import get_settings
 
     # Get features
+    if symbol is None:
+        symbol = get_settings().data_symbol
+
     if start_date and end_date:
-        features = get_features_in_range(session, start_date, end_date)
+        features = get_features_in_range(session, start_date, end_date, symbol=symbol)
     else:
         # Get all candles and features
-        candles = get_all_candles(session)
+        candles = get_all_candles(session, symbol=symbol)
         # Convert to dataframe format expected by training
         features = []
         for candle in candles:
@@ -355,9 +392,11 @@ def prepare_training_data(
         return pd.DataFrame(), None
 
     # Convert to DataFrame
+    eps = 1e-10
     df = pd.DataFrame([{
         "timestamp": f.timestamp,
         "close": float(f.candle.close) if f.candle else None,
+        "volume": float(f.candle.volume) if f.candle else None,
         "return": float(f.return_) if f.return_ else None,
         "range": float(f.range) if f.range else None,
         "body": float(f.body) if f.body else None,
@@ -370,11 +409,59 @@ def prepare_training_data(
 
     # Sort by timestamp
     df = df.sort_values("timestamp").reset_index(drop=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    hour = df["timestamp"].dt.hour
+    dow = df["timestamp"].dt.dayofweek
+    two_pi = 2 * np.pi
+    df["hour_sin"] = np.sin(two_pi * hour / 24.0)
+    df["hour_cos"] = np.cos(two_pi * hour / 24.0)
+    df["dow_sin"] = np.sin(two_pi * dow / 7.0)
+    df["dow_cos"] = np.cos(two_pi * dow / 7.0)
+    if "close" in df.columns:
+        df["log_close"] = np.log(df["close"].clip(lower=eps))
+    if "volume" in df.columns:
+        df["log_volume"] = np.log(df["volume"].clip(lower=eps))
 
     normalizer = None
     if normalize:
         normalizer = RollingNormalizer(window=30)
-        feature_cols = get_feature_columns()
+        feature_cols = normalize_cols or get_feature_columns()
         df = normalizer.fit_transform(df, feature_cols)
 
     return df, normalizer
+
+
+def prepare_training_data_multi(
+    session: Session,
+    symbols: list[str] | None = None,
+    normalize: bool = False,
+    normalize_cols: list[str] | None = None,
+) -> tuple[pd.DataFrame, dict[str, RollingNormalizer] | None]:
+    """Prepare multi-symbol data for model training."""
+    from src.database.operations import get_available_symbols
+
+    if symbols is None:
+        symbols = get_available_symbols(session)
+
+    frames: list[pd.DataFrame] = []
+    normalizers: dict[str, RollingNormalizer] = {}
+    for symbol in symbols:
+        df, normalizer = prepare_training_data(
+            session,
+            normalize=normalize,
+            normalize_cols=normalize_cols,
+            symbol=symbol,
+        )
+        if df.empty:
+            continue
+        df = df.copy()
+        df["symbol"] = symbol
+        frames.append(df)
+        if normalize and normalizer is not None:
+            normalizers[symbol] = normalizer
+
+    if not frames:
+        return pd.DataFrame(), None
+
+    combined = pd.concat(frames, ignore_index=True)
+    return combined, normalizers if normalize else None

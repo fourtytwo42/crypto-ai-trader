@@ -1,0 +1,28 @@
+{
+  "config": {
+    "model_type": "nhits",
+    "context_length": 168,
+    "horizon": 12,
+    "hidden_size": 512,
+    "num_layers": 6,
+    "patch_length": 16,
+    "stride": 8,
+    "learning_rate": 0.0001,
+    "batch_size": 32,
+    "epochs": 100,
+    "device": "cuda",
+    "freq": "H",
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ],
+    "data_frequency": "1hour"
+  },
+  "metrics": {
+    "mae": 0.46962279450125477,
+    "rmse": 0.5168682227566145,
+    "mape": 0.12359959075539396
+  },
+  "scaler_path": null
+}

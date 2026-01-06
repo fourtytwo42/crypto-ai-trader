@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import pickle
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +68,47 @@ def _prepare_target(train_df: pd.DataFrame, target_col: str) -> np.ndarray:
     return train_df[target_col].to_numpy(dtype=float)
 
 
+@contextmanager
+def _training_lock(model_dir: str | Path, max_age_seconds: int = 6 * 60 * 60):
+    model_dir = Path(model_dir)
+    lock_path = model_dir / ".training.lock"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    if lock_path.exists():
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+        except OSError:
+            age = 0
+        if age > max_age_seconds:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+        else:
+            raise RuntimeError(
+                f"training already in progress (lock: {lock_path}). "
+                "Wait for it to finish or remove the lock file if it is stale."
+            )
+
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise RuntimeError(
+            f"training already in progress (lock: {lock_path}). "
+            "Wait for it to finish or remove the lock file if it is stale."
+        )
+
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(json.dumps({"pid": os.getpid(), "started_at": time.time()}))
+        yield
+    finally:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
 def train_model(
     config: TrainingConfig,
     train_df: pd.DataFrame,
@@ -87,56 +131,57 @@ def train_model(
         target_col: Target column name.
         force_simple: Use SimpleQuantileModel even if NeuralForecast exists.
     """
-    model = create_model(config, force_simple=force_simple, feature_cols=feature_cols)
-    y_train = _prepare_target(train_df, target_col)
+    with _training_lock(model_dir):
+        model = create_model(config, force_simple=force_simple, feature_cols=feature_cols)
+        y_train = _prepare_target(train_df, target_col)
 
-    if isinstance(model, SimpleQuantileModel):
-        model.fit(y_train)
-        y_val = val_df[target_col].to_numpy(dtype=float)
-        preds = model.predict(len(y_val))["q50"]
-        metrics = calculate_metrics(y_val, preds)
-    else:
-        # NeuralForecast expects a data frame with columns [unique_id, ds, y]
-        from src.training.data_preparation import to_neuralforecast_format
+        if isinstance(model, SimpleQuantileModel):
+            model.fit(y_train)
+            y_val = val_df[target_col].to_numpy(dtype=float)
+            preds = model.predict(len(y_val))["q50"]
+            metrics = calculate_metrics(y_val, preds)
+        else:
+            # NeuralForecast expects a data frame with columns [unique_id, ds, y]
+            from src.training.data_preparation import to_neuralforecast_format
 
-        train_nf = to_neuralforecast_format(
-            train_df, target_col=target_col, feature_cols=feature_cols
+            train_nf = to_neuralforecast_format(
+                train_df, target_col=target_col, feature_cols=feature_cols
+            )
+            val_nf = to_neuralforecast_format(
+                val_df, target_col=target_col, feature_cols=feature_cols
+            )
+            model.fit(train_nf)
+            forecasts = model.predict(val_nf)
+            preds = forecasts["y"] if "y" in forecasts.columns else forecasts.iloc[:, 1]
+            y_true = val_nf["y"].to_numpy(dtype=float)
+            y_pred = preds.to_numpy(dtype=float)
+            if y_pred.ndim > 1:
+                y_pred = y_pred[:, 0]
+            if y_pred.shape[0] != y_true.shape[0]:
+                min_len = min(y_pred.shape[0], y_true.shape[0])
+                y_true = y_true[:min_len]
+                y_pred = y_pred[:min_len]
+            metrics = calculate_metrics(y_true, y_pred)
+
+        model_path = Path(model_dir) / "model.pt"
+        metadata_path = Path(model_dir) / "metadata.json"
+        if save_artifacts:
+            model_path, metadata_path = save_model_artifacts(
+                model,
+                config,
+                metrics,
+                model_dir=model_dir,
+                scaler=scaler,
+                keep_best=keep_best,
+            )
+
+        return TrainingResult(
+            model=model,
+            metrics=metrics,
+            model_path=model_path,
+            metadata_path=metadata_path,
+            scaler_path=None,
         )
-        val_nf = to_neuralforecast_format(
-            val_df, target_col=target_col, feature_cols=feature_cols
-        )
-        model.fit(train_nf)
-        forecasts = model.predict(val_nf)
-        preds = forecasts["y"] if "y" in forecasts.columns else forecasts.iloc[:, 1]
-        y_true = val_nf["y"].to_numpy(dtype=float)
-        y_pred = preds.to_numpy(dtype=float)
-        if y_pred.ndim > 1:
-            y_pred = y_pred[:, 0]
-        if y_pred.shape[0] != y_true.shape[0]:
-            min_len = min(y_pred.shape[0], y_true.shape[0])
-            y_true = y_true[:min_len]
-            y_pred = y_pred[:min_len]
-        metrics = calculate_metrics(y_true, y_pred)
-
-    model_path = Path(model_dir) / "model.pt"
-    metadata_path = Path(model_dir) / "metadata.json"
-    if save_artifacts:
-        model_path, metadata_path = save_model_artifacts(
-            model,
-            config,
-            metrics,
-            model_dir=model_dir,
-            scaler=scaler,
-            keep_best=keep_best,
-        )
-
-    return TrainingResult(
-        model=model,
-        metrics=metrics,
-        model_path=model_path,
-        metadata_path=metadata_path,
-        scaler_path=None,
-    )
 
 
 def save_model_artifacts(

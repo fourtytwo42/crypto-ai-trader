@@ -66,7 +66,7 @@ def create_model(
     try:
         from neuralforecast import NeuralForecast
         from neuralforecast.models import NHITS, PatchTST
-        from neuralforecast.losses.pytorch import MAE, QuantileLoss
+        from neuralforecast.losses.pytorch import MAE, QuantileLoss, HuberLoss
         import torch
         from src.training.progress import EpochProgressCallback
     except Exception:
@@ -74,12 +74,33 @@ def create_model(
 
     use_quantiles = config.horizon == 1
     loss_device = "cuda" if config.device == "cuda" and torch.cuda.is_available() else "cpu"
+    if loss_device == "cuda" and config.max_vram_gb is not None:
+        try:
+            device_index = torch.cuda.current_device()
+            total_mem = torch.cuda.get_device_properties(device_index).total_memory
+            max_bytes = int(config.max_vram_gb * 1024 * 1024 * 1024)
+            if total_mem > 0:
+                fraction = min(1.0, max_bytes / total_mem)
+                if fraction > 0:
+                    torch.cuda.set_per_process_memory_fraction(fraction, device=device_index)
+        except Exception:
+            pass
     quantile_loss = (
         QuantileLoss(q=torch.tensor(config.quantiles, device=loss_device))
         if use_quantiles
         else None
     )
-    base_loss = MAE() if not use_quantiles else None
+    horizon_weight = None
+    if config.horizon_weight is not None:
+        horizon_weight = np.asarray(config.horizon_weight, dtype=float)
+    base_loss = None
+    if not use_quantiles:
+        if config.loss_type == "mae":
+            base_loss = MAE(horizon_weight=horizon_weight)
+        elif config.loss_type == "huber":
+            base_loss = HuberLoss(delta=1.0, horizon_weight=horizon_weight)
+        else:
+            raise ModelFactoryError(f"unsupported loss_type: {config.loss_type}")
     use_gpu = loss_device == "cuda"
     trainer_kwargs = {
         "enable_progress_bar": False,
@@ -87,6 +108,9 @@ def create_model(
         "accelerator": "gpu" if use_gpu else "cpu",
         "devices": 1,
     }
+    if use_gpu:
+        # Mixed precision reduces activation memory footprint.
+        trainer_kwargs["precision"] = "16-mixed"
 
     if config.model_type == "patchtst":
         model = PatchTST(

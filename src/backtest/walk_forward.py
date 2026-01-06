@@ -19,6 +19,7 @@ from src.training.config import TrainingConfig
 from src.training.data_preparation import walk_forward_splits
 from src.training.trainer import train_model
 from src.training.evaluator import calculate_metrics as calculate_forecast_metrics
+from src.training.progress import ProgressDisplay, set_active_display
 
 logger = structlog.get_logger(__name__)
 
@@ -55,6 +56,8 @@ def walk_forward_backtest(
     purge: int = 1,
     force_simple: bool = False,
     backtest_config: BacktestConfig | None = None,
+    start_window: int | None = None,
+    max_windows: int | None = None,
 ) -> BacktestResult:
     """Run walk-forward backtest with rolling windows.
 
@@ -112,78 +115,99 @@ def walk_forward_backtest(
     running_mape = 0.0
     running_count = 0
     total_splits = len(splits)
-    for idx, split in enumerate(splits, start=1):
-        logger.info("Backtest window start", window=idx, total_windows=total_splits)
-        feature_cols = [col for col in get_feature_columns() if col in split.train.columns]
-        target_col = "target_return" if "target_return" in split.train.columns else "return"
-        result = train_model(
-            config,
-            split.train,
-            split.val,
-            model_dir=model_dir,
-            target_col=target_col,
-            force_simple=force_simple,
-            feature_cols=feature_cols,
-            save_artifacts=False,
-        )
-        preds = generate_predictions(
-            result.model,
-            split.test,
-            feature_cols=feature_cols,
-            target_col=target_col,
-        )
+    start_idx = 1 if start_window is None else max(1, start_window)
+    if start_idx > total_splits:
+        raise ValueError("start_window exceeds available windows")
+    end_idx = total_splits
+    if max_windows is not None:
+        if max_windows <= 0:
+            raise ValueError("max_windows must be positive")
+        end_idx = min(total_splits, start_idx - 1 + max_windows)
+    splits_subset = splits[start_idx - 1 : end_idx]
 
-        # Align test data with predictions
-        aligned_test = split.test.tail(len(preds)).reset_index(drop=True)
+    display = ProgressDisplay(
+        total_windows=total_splits,
+        total_epochs=config.epochs,
+        window_label="Backtest windows",
+        epoch_label="Training epochs",
+    )
+    set_active_display(display)
+    try:
+        for idx, split in enumerate(splits_subset, start=start_idx):
+            display.set_window(idx, total=total_splits)
+            feature_cols = [col for col in get_feature_columns() if col in split.train.columns]
+            target_col = "target_return" if "target_return" in split.train.columns else "return"
+            result = train_model(
+                config,
+                split.train,
+                split.val,
+                model_dir=model_dir,
+                target_col=target_col,
+                force_simple=force_simple,
+                feature_cols=feature_cols,
+                save_artifacts=False,
+            )
+            preds = generate_predictions(
+                result.model,
+                split.test,
+                feature_cols=feature_cols,
+                target_col=target_col,
+            )
 
-        # Extract volatility series for adaptive threshold
-        volatility_series: list[float] | None = None
-        vol_col = backtest_config.volatility_window
-        if backtest_config.volatility_adaptive and vol_col in aligned_test.columns:
-            volatility_series = aligned_test[vol_col].tolist()
+            # Align test data with predictions
+            aligned_test = split.test.tail(len(preds)).reset_index(drop=True)
 
-        # Generate signals with enhanced config
-        signals = apply_signals(
-            [{"q10": p["q10"], "q50": p["q50"], "q90": p["q90"]} for p in preds],
-            threshold=backtest_config.threshold,
-            volatility_series=volatility_series,
-            config=signal_config,
-        )
+            # Extract volatility series for adaptive threshold
+            volatility_series: list[float] | None = None
+            vol_col = backtest_config.volatility_window
+            if backtest_config.volatility_adaptive and vol_col in aligned_test.columns:
+                volatility_series = aligned_test[vol_col].tolist()
 
-        metrics: dict[str, float] = {}
-        trades = execute_signals(aligned_test, signals)
-        if target_col == "return":
-            metrics = calculate_metrics(trades)
+            # Generate signals with enhanced config
+            signals = apply_signals(
+                [{"q10": p["q10"], "q50": p["q50"], "q90": p["q90"]} for p in preds],
+                threshold=backtest_config.threshold,
+                volatility_series=volatility_series,
+                config=signal_config,
+            )
 
-        y_true = aligned_test[target_col].to_numpy(dtype=float)
-        y_pred = [float(item["q50"]) for item in preds]
-        if len(y_pred) < len(y_true):
-            y_true = y_true[-len(y_pred) :]
-        pred_metrics = calculate_prediction_metrics(list(y_true), y_pred)
-        forecast_metrics = calculate_forecast_metrics(
-            y_true,
-            pd.Series(y_pred, dtype=float).to_numpy(),
-        )
-        metrics.update(pred_metrics)
-        metrics.update(forecast_metrics)
+            metrics: dict[str, float] = {}
+            trades = execute_signals(aligned_test, signals)
+            if target_col == "return":
+                metrics = calculate_metrics(trades)
 
-        window_metrics.append(metrics)
-        running_count += 1
-        running_mae += float(metrics.get("mae", 0.0))
-        running_rmse += float(metrics.get("rmse", 0.0))
-        running_mape += float(metrics.get("mape", 0.0))
-        avg_mae = running_mae / running_count
-        avg_rmse = running_rmse / running_count
-        avg_mape = running_mape / running_count
-        logger.info(
-            "Backtest window end",
-            window=idx,
-            total_windows=total_splits,
-            metrics=metrics,
-            avg_mae=avg_mae,
-            avg_rmse=avg_rmse,
-            avg_mape=avg_mape,
-        )
+            y_true = aligned_test[target_col].to_numpy(dtype=float)
+            y_pred = [float(item["q50"]) for item in preds]
+            if len(y_pred) < len(y_true):
+                y_true = y_true[-len(y_pred) :]
+            pred_metrics = calculate_prediction_metrics(list(y_true), y_pred)
+            forecast_metrics = calculate_forecast_metrics(
+                y_true,
+                pd.Series(y_pred, dtype=float).to_numpy(),
+            )
+            metrics.update(pred_metrics)
+            metrics.update(forecast_metrics)
+
+            window_metrics.append(metrics)
+            running_count += 1
+            running_mae += float(metrics.get("mae", 0.0))
+            running_rmse += float(metrics.get("rmse", 0.0))
+            running_mape += float(metrics.get("mape", 0.0))
+            avg_mae = running_mae / running_count
+            avg_rmse = running_rmse / running_count
+            avg_mape = running_mape / running_count
+            logger.info(
+                "Backtest window end",
+                window=idx,
+                total_windows=total_splits,
+                metrics=metrics,
+                avg_mae=avg_mae,
+                avg_rmse=avg_rmse,
+                avg_mape=avg_mape,
+            )
+            display.finish_window()
+    finally:
+        set_active_display(None)
 
     if not window_metrics:
         aggregated = {

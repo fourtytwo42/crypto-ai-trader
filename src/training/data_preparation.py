@@ -49,6 +49,7 @@ def to_neuralforecast_format(
     target_col: str = "return",
     timestamp_col: str = "timestamp",
     unique_id: str = "BTC",
+    unique_id_col: str | None = None,
     feature_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Convert to NeuralForecast format.
@@ -58,8 +59,15 @@ def to_neuralforecast_format(
     """
     if timestamp_col not in df.columns or target_col not in df.columns:
         raise ValueError("missing required columns")
+    if unique_id_col is not None:
+        if unique_id_col not in df.columns:
+            raise ValueError("missing unique_id column")
+        uid_values = df[unique_id_col]
+    else:
+        uid_values = unique_id
+
     data = {
-        "unique_id": unique_id,
+        "unique_id": uid_values,
         "ds": df[timestamp_col],
         "y": df[target_col],
     }

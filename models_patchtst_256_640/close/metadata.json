@@ -1,0 +1,28 @@
+{
+  "config": {
+    "model_type": "patchtst",
+    "context_length": 256,
+    "horizon": 12,
+    "hidden_size": 640,
+    "num_layers": 8,
+    "patch_length": 16,
+    "stride": 8,
+    "learning_rate": 0.0001,
+    "batch_size": 8,
+    "epochs": 50,
+    "device": "cuda",
+    "freq": "H",
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ],
+    "data_frequency": "1hour"
+  },
+  "metrics": {
+    "mae": 0.28893402731097345,
+    "rmse": 0.28897738867866857,
+    "mape": 0.025973991588949346
+  },
+  "scaler_path": null
+}
