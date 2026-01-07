@@ -230,6 +230,34 @@ Purpose: Track training/backtest runs, settings, and key metrics for comparing i
 - Holdout (latest 24h) price accuracy%: BTC=94.15, ETH=94.60, LTC=91.58, XRP=92.98
 - Notes: strongest overall so far; improved ETH/XRP and solid LTC while matching baseline BTC.
 
+## Holdout 24h (NHITS, blocks 3/3/3, MLP 512x3)
+- Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity, n_blocks=3,3,3, mlp_units=512|512|512;512|512|512;512|512|512, n_pool_kernel_size=2,2,1, n_freq_downsample=4,2,1
+- Train metrics: mae=0.6556, rmse=0.6556, mape=0.7488
+- Holdout (latest 24h) directional accuracy%: BTC=100.0, ETH=100.0, LTC=95.83, XRP=100.0
+- Holdout (latest 24h) price accuracy%: BTC=94.15, ETH=94.60, LTC=91.58, XRP=92.98
+- Notes: identical to blocks 3/3/3 baseline; extra MLP depth did not change outcome.
+
+## Holdout 24h (NHITS, 4 stacks, blocks 2/2/2/2)
+- Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity,identity, n_blocks=2,2,2,2, mlp_units=512|512;512|512;512|512;512|512, n_pool_kernel_size=2,2,1,1, n_freq_downsample=8,4,2,1
+- Train metrics: mae=0.6275, rmse=0.6275, mape=0.7167
+- Holdout (latest 24h) directional accuracy%: BTC=100.0, ETH=100.0, LTC=95.83, XRP=95.83
+- Holdout (latest 24h) price accuracy%: BTC=92.48, ETH=90.55, LTC=88.61, XRP=88.71
+- Notes: worse than 3-stack baseline; 4 stacks not beneficial here.
+
+## Holdout 24h (NHITS, blocks 3/3/3, MLP 768)
+- Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity, n_blocks=3,3,3, mlp_units=768|768;768|768;768|768, n_pool_kernel_size=2,2,1, n_freq_downsample=4,2,1
+- Train metrics: mae=0.6328, rmse=0.6328, mape=0.7228
+- Holdout (latest 24h) directional accuracy%: BTC=100.0, ETH=100.0, LTC=95.83, XRP=100.0
+- Holdout (latest 24h) price accuracy%: BTC=92.54, ETH=93.59, LTC=93.86, XRP=93.23
+- Notes: improves ETH/LTC/XRP but hurts BTC vs baseline; competitive but not a clear overall win.
+
+## Holdout 24h (NHITS, blocks 3/3/2, MLP 768)
+- Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity, n_blocks=3,3,2, mlp_units=768|768;768|768;768|768, n_pool_kernel_size=2,2,1, n_freq_downsample=4,2,1
+- Train metrics: mae=0.5993, rmse=0.5993, mape=0.6845
+- Holdout (latest 24h) directional accuracy%: BTC=100.0, ETH=100.0, LTC=95.83, XRP=100.0
+- Holdout (latest 24h) price accuracy%: BTC=93.81, ETH=95.06, LTC=92.47, XRP=94.80
+- Notes: new best overall so far (avg ~94.04); stronger ETH/XRP while keeping BTC/LTC high.
+
 ## Holdout 24h (NHITS, blocks 4/4/4)
 - Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity, n_blocks=4,4,4, mlp_units=512|512;512|512;512|512, n_pool_kernel_size=2,2,1, n_freq_downsample=4,2,1
 - Train metrics: mae=0.6961, rmse=0.6961, mape=0.7951
