@@ -9,6 +9,7 @@ import structlog
 from src.cli.commands import (
     backtest_command,
     forecast_backtest_command,
+    forecast_holdout_24h_command,
     forecast_train_command,
     forecast_predict_command,
     load_data_command,
@@ -19,6 +20,32 @@ from src.cli.commands import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _parse_csv_ints(value: str | None) -> list[int] | None:
+    if not value:
+        return None
+    return [int(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def _parse_csv_strings(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_mlp_units(value: str | None) -> list[list[int]] | None:
+    if not value:
+        return None
+    stacks = [stack.strip() for stack in value.split(";") if stack.strip()]
+    units: list[list[int]] = []
+    for stack in stacks:
+        sep = "|" if "|" in stack else ","
+        inner = [int(item.strip()) for item in stack.split(sep) if item.strip()]
+        if not inner:
+            continue
+        units.append(inner)
+    return units or None
 
 
 @click.group(invoke_without_command=True)
@@ -241,6 +268,12 @@ def forecast_backtest(
 @click.option("--batch-size", type=int, default=None, help="Training batch size")
 @click.option("--learning-rate", type=float, default=None, help="Learning rate")
 @click.option("--model-type", default="nhits", type=click.Choice(["patchtst", "nhits"]))
+@click.option(
+    "--symbols",
+    default=None,
+    help="Comma-separated symbols for multi-asset training (e.g., BTC-USDT,ETH-USDT).",
+)
+@click.option("--multi-asset", is_flag=True, help="Enable multi-asset training.")
 def forecast_train(
     model_dir: str,
     horizon: int,
@@ -256,8 +289,13 @@ def forecast_train(
     batch_size: int | None,
     learning_rate: float | None,
     model_type: str,
+    symbols: str | None,
+    multi_asset: bool,
 ) -> None:
     """Train and save forecast models for close and volume."""
+    symbol_list = None
+    if symbols:
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     result = forecast_train_command(
         model_dir=model_dir,
         horizon=horizon,
@@ -273,6 +311,8 @@ def forecast_train(
         batch_size=batch_size,
         learning_rate=learning_rate,
         model_type=model_type,
+        symbols=symbol_list,
+        multi_asset=multi_asset,
     )
     click.echo(f"Forecast training metrics: {result}")
 
@@ -284,6 +324,93 @@ def forecast_predict(model_dir: str, horizon: int) -> None:
     """Generate next-horizon forecasts using saved models."""
     result = forecast_predict_command(model_dir=model_dir, horizon=horizon)
     click.echo(f"Forecast prediction: {result}")
+
+
+@cli.command("forecast-holdout-24h")
+@click.option("--context-length", type=int, required=True, help="Input context length in rows")
+@click.option("--hidden-size", type=int, required=True, help="Model hidden size")
+@click.option("--num-layers", type=int, required=True, help="Number of model layers")
+@click.option("--patch-length", type=int, required=True, help="Patch length (PatchTST)")
+@click.option("--stride", type=int, required=True, help="Patch stride (PatchTST)")
+@click.option("--loss-type", default="huber", type=click.Choice(["mae", "huber"]))
+@click.option("--epochs", type=int, required=True, help="Training epochs")
+@click.option("--batch-size", type=int, required=True, help="Training batch size")
+@click.option("--learning-rate", type=float, required=True, help="Learning rate")
+@click.option("--model-type", default="patchtst", type=click.Choice(["patchtst", "nhits"]))
+@click.option(
+    "--nhits-stack-types",
+    default=None,
+    help="NHITS stack types (comma-separated, e.g., identity,identity,identity).",
+)
+@click.option(
+    "--nhits-n-blocks",
+    default=None,
+    help="NHITS blocks per stack (comma-separated, e.g., 1,1,1).",
+)
+@click.option(
+    "--nhits-mlp-units",
+    default=None,
+    help="NHITS MLP units per stack (e.g., 512|512;512|512;512|512).",
+)
+@click.option(
+    "--nhits-n-pool-kernel-size",
+    default=None,
+    help="NHITS pool kernel sizes (comma-separated, e.g., 2,2,1).",
+)
+@click.option(
+    "--nhits-n-freq-downsample",
+    default=None,
+    help="NHITS freq downsample factors (comma-separated, e.g., 4,2,1).",
+)
+@click.option(
+    "--symbols",
+    default=None,
+    help="Comma-separated symbols for multi-asset training (e.g., BTC-USDT,ETH-USDT).",
+)
+@click.option("--multi-asset", is_flag=True, help="Enable multi-asset training.")
+def forecast_holdout_24h(
+    context_length: int,
+    hidden_size: int,
+    num_layers: int,
+    patch_length: int,
+    stride: int,
+    loss_type: str,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    model_type: str,
+    nhits_stack_types: str | None,
+    nhits_n_blocks: str | None,
+    nhits_mlp_units: str | None,
+    nhits_n_pool_kernel_size: str | None,
+    nhits_n_freq_downsample: str | None,
+    symbols: str | None,
+    multi_asset: bool,
+) -> None:
+    """Train on data older than last 24 hours and evaluate on latest 24 hours."""
+    symbol_list = None
+    if symbols:
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    result = forecast_holdout_24h_command(
+        context_length=context_length,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        patch_length=patch_length,
+        stride=stride,
+        loss_type=loss_type,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        model_type=model_type,
+        nhits_stack_types=_parse_csv_strings(nhits_stack_types),
+        nhits_n_blocks=_parse_csv_ints(nhits_n_blocks),
+        nhits_mlp_units=_parse_mlp_units(nhits_mlp_units),
+        nhits_n_pool_kernel_size=_parse_csv_ints(nhits_n_pool_kernel_size),
+        nhits_n_freq_downsample=_parse_csv_ints(nhits_n_freq_downsample),
+        symbols=symbol_list,
+        multi_asset=multi_asset,
+    )
+    click.echo(f"Holdout 24h metrics: {result}")
 
 
 @cli.command()

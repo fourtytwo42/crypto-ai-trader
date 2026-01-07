@@ -47,6 +47,177 @@ def _build_horizon_weights(mode: str, horizon: int) -> list[float] | None:
     return weights.tolist()
 
 
+def _add_return_24h_target(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.DataFrame:
+    df = df.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+    df["return_24h"] = df.groupby(symbol_col)["log_close"].shift(-24) - df["log_close"]
+    return df
+
+
+def forecast_holdout_24h_command(
+    context_length: int,
+    hidden_size: int,
+    num_layers: int,
+    patch_length: int,
+    stride: int,
+    loss_type: str,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    model_type: str,
+    nhits_stack_types: list[str] | None = None,
+    nhits_n_blocks: list[int] | None = None,
+    nhits_mlp_units: list[list[int]] | None = None,
+    nhits_n_pool_kernel_size: list[int] | None = None,
+    nhits_n_freq_downsample: list[int] | None = None,
+    symbols: list[str] | None = None,
+    multi_asset: bool = False,
+) -> dict[str, object]:
+    """Train on data older than last 24 hours and evaluate on latest 24 hours."""
+    settings = get_settings()
+    config = TrainingConfig(
+        model_type=model_type,
+        horizon=1,
+        device=settings.train_device,
+        data_frequency="1hour",
+        context_length=context_length,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        patch_length=patch_length,
+        stride=stride,
+        loss_type=loss_type,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        nhits_stack_types=nhits_stack_types,
+        nhits_n_blocks=nhits_n_blocks,
+        nhits_mlp_units=nhits_mlp_units,
+        nhits_n_pool_kernel_size=nhits_n_pool_kernel_size,
+        nhits_n_freq_downsample=nhits_n_freq_downsample,
+    )
+
+    db = get_db_manager()
+    with db.session() as session:
+        normalize_cols = get_feature_columns()
+        if "return" in normalize_cols:
+            normalize_cols = [col for col in normalize_cols if col != "return"]
+        normalize_cols.append("log_close")
+        normalize_cols = list(dict.fromkeys(normalize_cols))
+        features_df, _ = prepare_training_data_multi(
+            session,
+            symbols=symbols,
+            normalize=True,
+            normalize_cols=normalize_cols,
+        )
+        multi_asset = True
+
+    if features_df.empty:
+        raise ValueError("no features available for 24h holdout")
+
+    features_df = features_df.dropna().reset_index(drop=True)
+    features_df = _add_return_24h_target(features_df)
+    features_df = features_df.dropna().reset_index(drop=True)
+
+    symbol_col = "symbol"
+    train_frames: list[pd.DataFrame] = []
+    eval_items: list[dict[str, int | str]] = []
+
+    for symbol, symbol_df in features_df.groupby(symbol_col):
+        symbol_df = symbol_df.sort_values("timestamp").reset_index(drop=True)
+        if len(symbol_df) < context_length + 48:
+            continue
+        train_end = len(symbol_df) - 48
+        train_frames.append(symbol_df.iloc[:train_end].reset_index(drop=True))
+        eval_start = len(symbol_df) - 48
+        eval_end = len(symbol_df) - 24
+        for idx in range(eval_start, eval_end):
+            eval_items.append(
+                {
+                    "symbol": str(symbol),
+                    "input_idx": idx,
+                    "target_idx": idx + 24,
+                }
+            )
+
+    if not train_frames or not eval_items:
+        raise ValueError("insufficient data for 24h holdout evaluation")
+
+    train_df = pd.concat(train_frames, ignore_index=True)
+    val_size = max(int(len(train_df) * settings.train_validation_split), 30)
+    train_split = train_df.iloc[:-val_size].reset_index(drop=True)
+    val_split = train_df.iloc[-val_size:].reset_index(drop=True)
+
+    feature_cols = [col for col in FORECAST_FEATURES if col in train_df.columns]
+
+    result = train_model(
+        config,
+        train_split,
+        val_split,
+        model_dir="models_holdout_24h_tmp",
+        target_col="return_24h",
+        force_simple=False,
+        feature_cols=feature_cols,
+        save_artifacts=False,
+        keep_best=False,
+        unique_id_col=symbol_col if multi_asset else None,
+    )
+
+    by_symbol: dict[str, list[dict[str, float]]] = {}
+    for item in eval_items:
+        symbol = str(item["symbol"])
+        symbol_df = features_df[features_df[symbol_col] == symbol].reset_index(drop=True)
+        input_idx = int(item["input_idx"])
+        target_idx = int(item["target_idx"])
+        history_df = symbol_df.iloc[: input_idx + 1].tail(context_length).reset_index(drop=True)
+        if len(history_df) < context_length:
+            continue
+        last_log_close = float(history_df["log_close"].iloc[-1])
+        preds = forecast_next_horizon(
+            result.model,
+            history_df,
+            target_col="return_24h",
+            feature_cols=feature_cols,
+            horizon=1,
+        )
+        pred_return = float(np.asarray(preds, dtype=float)[-1])
+        pred_log_close = last_log_close + pred_return
+        pred_close = float(np.exp(pred_log_close))
+        actual_log_close = float(symbol_df["log_close"].iloc[target_idx])
+        actual_close = float(np.exp(actual_log_close))
+        prev_close = float(np.exp(last_log_close))
+        actual_dir = float(np.sign(actual_close - prev_close))
+        pred_dir = float(np.sign(pred_close - prev_close))
+        dir_ok = float(actual_dir == pred_dir)
+        if actual_close == 0:
+            acc_pct = float("nan")
+        else:
+            acc_pct = max(0.0, 1.0 - abs(pred_close - actual_close) / actual_close) * 100.0
+        by_symbol.setdefault(symbol, []).append(
+            {
+                "pred_close": pred_close,
+                "actual_close": actual_close,
+                "direction_ok": dir_ok,
+                "accuracy_pct": acc_pct,
+            }
+        )
+
+    summary: dict[str, dict[str, float]] = {}
+    for symbol, rows in by_symbol.items():
+        if not rows:
+            continue
+        direction = float(np.mean([r["direction_ok"] for r in rows])) * 100.0
+        accuracy = float(np.nanmean([r["accuracy_pct"] for r in rows]))
+        summary[symbol] = {
+            "directional_accuracy_pct": direction,
+            "price_accuracy_pct": accuracy,
+            "samples": float(len(rows)),
+        }
+
+    return {
+        "summary": summary,
+        "train_metrics": result.metrics,
+    }
+
+
 def load_data_command(
     file_path: str,
     symbol: str,
@@ -351,6 +522,8 @@ def forecast_train_command(
     batch_size: int | None = None,
     learning_rate: float | None = None,
     model_type: str = "nhits",
+    symbols: list[str] | None = None,
+    multi_asset: bool = False,
 ) -> dict[str, dict[str, float]]:
     """Train and save forecast models for close and volume."""
     settings = get_settings()
@@ -373,7 +546,23 @@ def forecast_train_command(
 
     db = get_db_manager()
     with db.session() as session:
-        features_df, _ = prepare_training_data(session, normalize=False)
+        if multi_asset or symbols:
+            normalize_cols = get_feature_columns()
+            if close_target == "return":
+                normalize_cols = [col for col in normalize_cols if col != "return"]
+                normalize_cols.append("log_close")
+            elif close_target in normalize_cols:
+                normalize_cols = [col for col in normalize_cols if col != close_target]
+            normalize_cols = list(dict.fromkeys(normalize_cols))
+            features_df, _ = prepare_training_data_multi(
+                session,
+                symbols=symbols,
+                normalize=True,
+                normalize_cols=normalize_cols,
+            )
+            multi_asset = True
+        else:
+            features_df, _ = prepare_training_data(session, normalize=False)
 
     if features_df.empty:
         raise ValueError("no features available for forecast training")
@@ -411,6 +600,7 @@ def forecast_train_command(
             feature_cols=feature_cols,
             save_artifacts=True,
             keep_best=True,
+            unique_id_col="symbol" if multi_asset else None,
         )
         results[label] = result.metrics
         metadata_path = Path(model_dir) / label / "metadata.json"

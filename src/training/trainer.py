@@ -118,6 +118,7 @@ def train_model(
     force_simple: bool = False,
     scaler: object | None = None,
     feature_cols: list[str] | None = None,
+    unique_id_col: str | None = None,
     save_artifacts: bool = True,
     keep_best: bool = False,
 ) -> TrainingResult:
@@ -145,10 +146,16 @@ def train_model(
             from src.training.data_preparation import to_neuralforecast_format
 
             train_nf = to_neuralforecast_format(
-                train_df, target_col=target_col, feature_cols=feature_cols
+                train_df,
+                target_col=target_col,
+                feature_cols=feature_cols,
+                unique_id_col=unique_id_col,
             )
             val_nf = to_neuralforecast_format(
-                val_df, target_col=target_col, feature_cols=feature_cols
+                val_df,
+                target_col=target_col,
+                feature_cols=feature_cols,
+                unique_id_col=unique_id_col,
             )
             model.fit(train_nf)
             forecasts = model.predict(val_nf)

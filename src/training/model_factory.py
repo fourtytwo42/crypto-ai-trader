@@ -128,6 +128,17 @@ def create_model(
             valid_loss=quantile_loss or base_loss,
         )
     elif config.model_type == "nhits":
+        nhits_kwargs: dict[str, Any] = {}
+        if config.nhits_stack_types is not None:
+            nhits_kwargs["stack_types"] = config.nhits_stack_types
+        if config.nhits_n_blocks is not None:
+            nhits_kwargs["n_blocks"] = config.nhits_n_blocks
+        if config.nhits_mlp_units is not None:
+            nhits_kwargs["mlp_units"] = config.nhits_mlp_units
+        if config.nhits_n_pool_kernel_size is not None:
+            nhits_kwargs["n_pool_kernel_size"] = config.nhits_n_pool_kernel_size
+        if config.nhits_n_freq_downsample is not None:
+            nhits_kwargs["n_freq_downsample"] = config.nhits_n_freq_downsample
         model = NHITS(
             h=config.horizon,
             input_size=config.context_length,
@@ -138,6 +149,7 @@ def create_model(
             **trainer_kwargs,
             loss=quantile_loss or base_loss,
             valid_loss=quantile_loss or base_loss,
+            **nhits_kwargs,
         )
     else:
         raise ModelFactoryError(f"unsupported model_type: {config.model_type}")

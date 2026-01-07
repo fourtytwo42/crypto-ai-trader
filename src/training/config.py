@@ -33,6 +33,11 @@ class TrainingConfig:
     horizon_weight: list[float] | None = None
     loss_type: str = "mae"
     data_frequency: DataFrequency = "1day"  # KuCoin timeframe for data fetching
+    nhits_stack_types: list[str] | None = None
+    nhits_n_blocks: list[int] | None = None
+    nhits_mlp_units: list[list[int]] | None = None
+    nhits_n_pool_kernel_size: list[int] | None = None
+    nhits_n_freq_downsample: list[int] | None = None
 
     def to_dict(self) -> dict[str, float | int | str | list[float]]:
         """Convert config to a JSON-serializable dict."""
@@ -54,6 +59,19 @@ class TrainingConfig:
             "horizon_weight": list(self.horizon_weight) if self.horizon_weight else None,
             "loss_type": self.loss_type,
             "data_frequency": self.data_frequency,
+            "nhits_stack_types": list(self.nhits_stack_types)
+            if self.nhits_stack_types
+            else None,
+            "nhits_n_blocks": list(self.nhits_n_blocks) if self.nhits_n_blocks else None,
+            "nhits_mlp_units": [list(units) for units in self.nhits_mlp_units]
+            if self.nhits_mlp_units
+            else None,
+            "nhits_n_pool_kernel_size": list(self.nhits_n_pool_kernel_size)
+            if self.nhits_n_pool_kernel_size
+            else None,
+            "nhits_n_freq_downsample": list(self.nhits_n_freq_downsample)
+            if self.nhits_n_freq_downsample
+            else None,
         }
 
     def validate(self) -> None:
@@ -79,3 +97,13 @@ class TrainingConfig:
             raise ValueError("horizon_weight length must match horizon")
         if self.loss_type not in {"mae", "huber"}:
             raise ValueError("loss_type must be 'mae' or 'huber'")
+        nhits_fields = [
+            self.nhits_stack_types,
+            self.nhits_n_blocks,
+            self.nhits_mlp_units,
+            self.nhits_n_pool_kernel_size,
+            self.nhits_n_freq_downsample,
+        ]
+        nhits_lengths = [len(field) for field in nhits_fields if field is not None]
+        if nhits_lengths and any(length != nhits_lengths[0] for length in nhits_lengths):
+            raise ValueError("NHITS stack parameter lengths must match")
