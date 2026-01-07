@@ -244,6 +244,20 @@ Purpose: Track training/backtest runs, settings, and key metrics for comparing i
 - Holdout (latest 24h) price accuracy%: BTC=94.24, ETH=92.71, LTC=90.75, XRP=89.29
 - Notes: larger model did not improve overall vs blocks 3/3/3 or 4/4/4.
 
+## Holdout 24h (NHITS, blocks 3/3/3 with downsample 6/3/1)
+- Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity, n_blocks=3,3,3, mlp_units=512|512;512|512;512|512, n_pool_kernel_size=3,2,1, n_freq_downsample=6,3,1
+- Train metrics: mae=0.6405, rmse=0.6405, mape=0.7316
+- Holdout (latest 24h) directional accuracy%: BTC=100.0, ETH=100.0, LTC=95.83, XRP=95.83
+- Holdout (latest 24h) price accuracy%: BTC=93.03, ETH=92.41, LTC=89.92, XRP=93.66
+- Notes: strong ETH/XRP, weaker BTC/LTC vs blocks 3/3/3 baseline; mixed.
+
+## Holdout 24h (NHITS, blocks 3/3/3, pool 2/1/1)
+- Config: horizon=1 (24h target), context_length=336, stack_types=identity,identity,identity, n_blocks=3,3,3, mlp_units=512|512;512|512;512|512, n_pool_kernel_size=2,1,1, n_freq_downsample=4,2,1
+- Train metrics: mae=0.7174, rmse=0.7174, mape=0.8194
+- Holdout (latest 24h) directional accuracy%: BTC=100.0, ETH=100.0, LTC=95.83, XRP=100.0
+- Holdout (latest 24h) price accuracy%: BTC=90.97, ETH=86.80, LTC=93.91, XRP=83.94
+- Notes: degraded BTC/ETH/XRP vs baseline; not competitive.
+
 ## Multi-asset PatchTST (rerun with mixed precision + mem cleanup)
 - Config: train_size=35040, val_size=5256, test_size=4380, step_size=1095, epochs=50
 - Windows: 8
