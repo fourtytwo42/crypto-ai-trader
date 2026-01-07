@@ -17,8 +17,10 @@ from src.database.models import (
     BacktestTrade,
     Candle,
     Feature,
+    ForecastPrediction,
     Model,
     Prediction,
+    TrainingJob,
 )
 
 logger = structlog.get_logger(__name__)
@@ -413,6 +415,63 @@ def update_model_metrics(
     return model
 
 
+# Training Job Operations
+def create_training_job(
+    session: Session,
+    model_name: str,
+    config: dict[str, Any],
+    status: str = "pending",
+) -> TrainingJob:
+    """Create a training job record."""
+    job = TrainingJob(model_name=model_name, config=config, status=status)
+    session.add(job)
+    session.flush()
+    logger.info("Created training job", job_id=job.id, model_name=model_name)
+    return job
+
+
+def get_training_job(session: Session, job_id: int) -> TrainingJob | None:
+    """Get training job by ID."""
+    stmt = select(TrainingJob).where(TrainingJob.id == job_id)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def list_training_jobs(session: Session, limit: int = 50) -> list[TrainingJob]:
+    """List training jobs ordered by created_at descending."""
+    stmt = select(TrainingJob).order_by(TrainingJob.created_at.desc()).limit(limit)
+    return list(session.execute(stmt).scalars().all())
+
+
+def update_training_job(
+    session: Session,
+    job_id: int,
+    status: str | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    error: str | None = None,
+    model_id: int | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> TrainingJob | None:
+    """Update a training job record."""
+    job = get_training_job(session, job_id)
+    if not job:
+        return None
+    if status is not None:
+        job.status = status
+    if started_at is not None:
+        job.started_at = started_at
+    if finished_at is not None:
+        job.finished_at = finished_at
+    if error is not None:
+        job.error = error
+    if model_id is not None:
+        job.model_id = model_id
+    if metrics is not None:
+        job.metrics = metrics
+    session.flush()
+    return job
+
+
 # Prediction Operations
 def create_prediction(
     session: Session,
@@ -455,6 +514,86 @@ def create_prediction(
     session.flush()
     logger.debug("Created prediction", prediction_id=prediction.id, signal=signal)
     return prediction
+
+
+# Forecast Prediction Operations
+def create_forecast_prediction(
+    session: Session,
+    model_id: int,
+    symbol: str,
+    horizon_hours: int,
+    data_timestamp: datetime,
+    target_timestamp: datetime,
+    predicted_at: datetime,
+    predicted_close: Decimal,
+    predicted_direction: str | None = None,
+) -> ForecastPrediction:
+    """Create a forecast prediction record."""
+    prediction = ForecastPrediction(
+        model_id=model_id,
+        symbol=symbol,
+        horizon_hours=horizon_hours,
+        data_timestamp=data_timestamp,
+        target_timestamp=target_timestamp,
+        predicted_at=predicted_at,
+        predicted_close=predicted_close,
+        predicted_direction=predicted_direction,
+    )
+    session.add(prediction)
+    session.flush()
+    return prediction
+
+
+def get_cached_forecast_prediction(
+    session: Session,
+    model_id: int,
+    symbol: str,
+    horizon_hours: int,
+    data_timestamp: datetime,
+    min_predicted_at: datetime,
+) -> ForecastPrediction | None:
+    """Get cached forecast prediction if it is still fresh."""
+    stmt = (
+        select(ForecastPrediction)
+        .where(ForecastPrediction.model_id == model_id)
+        .where(ForecastPrediction.symbol == symbol)
+        .where(ForecastPrediction.horizon_hours == horizon_hours)
+        .where(ForecastPrediction.data_timestamp == data_timestamp)
+        .where(ForecastPrediction.predicted_at >= min_predicted_at)
+        .order_by(ForecastPrediction.predicted_at.desc())
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def update_forecast_prediction_actuals(
+    session: Session,
+    prediction_id: int,
+    actual_close: Decimal,
+    accuracy_pct: Decimal,
+) -> ForecastPrediction | None:
+    """Update actual close and accuracy on a forecast prediction."""
+    stmt = select(ForecastPrediction).where(ForecastPrediction.id == prediction_id)
+    prediction = session.execute(stmt).scalar_one_or_none()
+    if prediction:
+        prediction.actual_close = actual_close
+        prediction.accuracy_pct = accuracy_pct
+        session.flush()
+    return prediction
+
+
+def get_forecast_predictions(
+    session: Session,
+    symbol: str,
+    model_id: int | None = None,
+    limit: int = 100,
+) -> list[ForecastPrediction]:
+    """Get forecast predictions for a symbol."""
+    stmt = select(ForecastPrediction).where(ForecastPrediction.symbol == symbol)
+    if model_id is not None:
+        stmt = stmt.where(ForecastPrediction.model_id == model_id)
+    stmt = stmt.order_by(ForecastPrediction.predicted_at.desc()).limit(limit)
+    return list(session.execute(stmt).scalars().all())
 
 
 def get_predictions_by_model(

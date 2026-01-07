@@ -161,6 +161,9 @@ class Model(Base):
     predictions: Mapped[list["Prediction"]] = relationship(
         "Prediction", back_populates="model", cascade="all, delete-orphan"
     )
+    forecast_predictions: Mapped[list["ForecastPrediction"]] = relationship(
+        "ForecastPrediction", back_populates="model", cascade="all, delete-orphan"
+    )
     backtests: Mapped[list["Backtest"]] = relationship(
         "Backtest", back_populates="model", cascade="all, delete-orphan"
     )
@@ -218,6 +221,77 @@ class Prediction(Base):
 
     def __repr__(self) -> str:
         return f"<Prediction(id={self.id}, signal={self.signal}, q50={self.q50})>"
+
+
+class ForecastPrediction(Base):
+    """Forecast predictions for price targets."""
+
+    __tablename__ = "forecast_predictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False
+    )
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, default="BTC-USDT")
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    data_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    target_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    predicted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    predicted_close: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    predicted_direction: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    actual_close: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    accuracy_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    model: Mapped["Model"] = relationship("Model", back_populates="forecast_predictions")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "model_id",
+            "symbol",
+            "data_timestamp",
+            "horizon_hours",
+            name="uq_forecast_pred_cache",
+        ),
+        Index("idx_forecast_preds_model_id", "model_id"),
+        Index("idx_forecast_preds_symbol", "symbol"),
+        Index("idx_forecast_preds_target_ts", "target_timestamp"),
+        Index("idx_forecast_preds_predicted_at", "predicted_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ForecastPrediction(id={self.id}, symbol={self.symbol})>"
+
+
+class TrainingJob(Base):
+    """Training job tracking."""
+
+    __tablename__ = "training_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    model_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("models.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    model: Mapped["Model"] = relationship("Model")
+
+    __table_args__ = (
+        Index("idx_training_jobs_status", "status"),
+        Index("idx_training_jobs_created_at", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TrainingJob(id={self.id}, status={self.status})>"
 
 
 class Backtest(Base):

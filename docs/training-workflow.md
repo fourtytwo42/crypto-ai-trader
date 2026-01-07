@@ -64,3 +64,20 @@ Notes:
 - Progress logs show backtest windows, running average metrics, and per-config results.
 - Training artifacts are only saved for explicit training runs; backtests do not
   overwrite existing models.
+
+## Quick Prediction Workflow
+
+`quick-predict` is now the production-facing entry point for live inference. Instead
+of touching the historical database, the command streams the context window directly
+from KuCoin for each symbol requested. Features are built and normalized on the fly
+from the hourly candles, then the saved NHITS model predicts `return_24h`. No
+database writes occur, so you can request any KuCoin pair—even ones you haven't
+trained with.
+
+```bash
+source venv/bin/activate
+python -m src.main quick-predict --hours 24 --symbols BTC-USDT
+```
+
+If you want to refresh the model, add `--retrain` to copy the latest training run
+and reuse those weights for inference.

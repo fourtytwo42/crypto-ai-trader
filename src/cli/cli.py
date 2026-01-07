@@ -429,7 +429,7 @@ def forecast_holdout_24h(
 @click.option(
     "--symbols",
     default=None,
-    help="Comma-separated symbols (default: BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT)",
+    help="Comma-separated symbols (any KuCoin pair, default BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT)",
 )
 @click.option(
     "--model-dir",

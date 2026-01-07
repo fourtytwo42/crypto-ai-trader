@@ -23,6 +23,7 @@ Crypto AI Trader uses deep learning (NHITS neural network) to predict cryptocurr
 - Python 3.11+
 - PostgreSQL 15+
 - CUDA-capable GPU (optional, for faster training)
+- `structlog` (install via `pip install structlog`; required by the CLI)
 
 ### Installation
 
@@ -65,20 +66,22 @@ python -m src.main load-hourly --symbols BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT --y
 
 ### Quick Prediction (Recommended)
 
-The `quick-predict` command is the main way to use this system:
+`quick-predict` now streams the most recent context window directly from KuCoin (no database writes) and runs inference for any symbol you specify. Under the hood it fetches just `context_length + 720` hours, normalizes the features on the fly, and uses the saved NHITS model to project `return_24h`.
 
 ```bash
-# Inference only - use existing model, pull latest data:
+# Inference only: pull fresh candles for the model's context and predict
 python -m src.main quick-predict --hours 24
 
-# Retrain model first, then predict:
+# Use quick-predict with a specific pair (no DB seed required)
+python -m src.main quick-predict --hours 24 --symbols BTC-USDT
+
+# Retrain the NHITS model and predict with the new weights
 python -m src.main quick-predict --hours 24 --retrain
 
-# Predict 48 hours ahead:
-python -m src.main quick-predict --hours 48
+# Predict RTT for other KuCoin pairs
+python -m src.main quick-predict --hours 24 --symbols ADA-USDT
+```
 
-# Predict specific symbols:
-python -m src.main quick-predict --hours 24 --symbols BTC-USDT,ETH-USDT
 ```
 
 **Sample Output:**
@@ -157,6 +160,44 @@ python -m src.main --menu
 
 # View all commands
 python -m src.main --help
+```
+
+## API
+
+Start the API:
+
+```bash
+python -m src.main api --host 0.0.0.0 --port 8000
+```
+
+Example requests:
+
+```bash
+# Start a retrain job
+curl -X POST http://localhost:8000/trainings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model_type": "nhits",
+    "context_length": 168,
+    "horizon_hours": 24,
+    "hidden_size": 512,
+    "num_layers": 6,
+    "epochs": 50
+  }'
+
+# Check training status
+curl http://localhost:8000/trainings/1
+
+# Run a cached forecast prediction
+curl -X POST http://localhost:8000/forecast/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "BTC-USDT",
+    "hours": 24
+  }'
+
+# Fetch prediction history
+curl http://localhost:8000/forecast/history/BTC-USDT?limit=50
 ```
 
 ## Architecture

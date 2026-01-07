@@ -27,7 +27,12 @@ def load_model_artifacts(model_dir: str | Path) -> ModelBundle:
     if not model_path.exists() or not metadata_path.exists():
         raise FileNotFoundError("model artifacts not found")
 
+    metadata = json.loads(metadata_path.read_text())
     model = None
+    with model_path.open("rb") as handle:
+        prefix = handle.read(2)
+    is_zip = prefix == b"PK"
+
     try:
         import torch
 
@@ -36,17 +41,41 @@ def load_model_artifacts(model_dir: str | Path) -> ModelBundle:
         except Exception:
             safe_globals = None
 
-        if safe_globals is not None:
+        safe_types: list[type] = []
+        try:
             from src.training.model_factory import SimpleQuantileModel
 
-            with safe_globals([SimpleQuantileModel]):
+            safe_types.append(SimpleQuantileModel)
+        except Exception:
+            pass
+
+        model_type = str(metadata.get("config", {}).get("model_type", "")).lower()
+        if model_type in {"nhits", "patchtst"}:
+            try:
+                from neuralforecast import NeuralForecast
+                from neuralforecast.models import NHITS, PatchTST
+
+                safe_types.extend([NeuralForecast, NHITS, PatchTST])
+            except Exception as nf_exc:
+                if is_zip:
+                    raise RuntimeError(
+                        "Failed to load torch model. Install neuralforecast and torch, "
+                        "or run with the project venv."
+                    ) from nf_exc
+
+        if safe_globals is not None and safe_types:
+            with safe_globals(safe_types):
                 model = torch.load(model_path, weights_only=False)
         else:
             model = torch.load(model_path, weights_only=False)
-    except Exception:
+    except Exception as exc:
+        if is_zip:
+            raise RuntimeError(
+                "Failed to load torch model. Ensure torch and neuralforecast dependencies "
+                "are installed (use the project venv)."
+            ) from exc
         with model_path.open("rb") as handle:
             model = pickle.load(handle)
-    metadata = json.loads(metadata_path.read_text())
 
     scaler = None
     if scaler_path.exists():

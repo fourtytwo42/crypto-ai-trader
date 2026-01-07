@@ -2,35 +2,61 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_db
 from src.api.models import (
     BacktestInfo,
+    ForecastHistoryItem,
+    ForecastPredictRequest,
+    ForecastPredictResponse,
     ModelInfo,
     PredictionRequest,
     PredictionResponse,
     QuantilePrediction,
+    TrainingJobResponse,
+    TrainingRequest,
 )
 from src.config import get_settings
+from src.data.feature_extractor import get_feature_columns
+from src.data.pipeline import prepare_training_data, prepare_training_data_multi
 from src.database.operations import (
+    create_forecast_prediction,
     create_prediction,
+    create_training_job,
     get_all_backtests,
     get_all_models,
     get_backtest_by_id,
     get_backtests_by_model,
+    get_candle_by_timestamp,
+    get_cached_forecast_prediction,
+    get_forecast_predictions,
     get_latest_features,
     get_latest_prediction,
     get_model_by_id,
+    get_model_by_name,
     get_predictions_by_model,
     get_trades_by_backtest,
+    get_training_job,
+    list_training_jobs,
+    update_forecast_prediction_actuals,
+    update_training_job,
+    create_model,
 )
+from src.database.connection import get_db_manager
+from src.forecasting.predict import forecast_next_horizon, build_future_timestamps
+from src.forecasting.recent_features import (
+    build_recent_feature_df_from_candles,
+    fetch_recent_hourly_candles,
+)
+from src.forecasting.walk_forward_forecast import FORECAST_FEATURES
 from src.prediction.model_loader import load_model_artifacts
 from src.prediction.predictor import generate_predictions
 from src.prediction.signal_generator import (
@@ -41,6 +67,9 @@ from src.prediction.signal_generator import (
     generate_signal,
     generate_signal_with_position_size,
 )
+from src.training.config import TrainingConfig
+from src.training.trainer import train_model
+from src.training.targets import add_return_24h_target
 
 router = APIRouter()
 
@@ -86,6 +115,240 @@ async def get_model(model_id: int, db: Session = Depends(get_db)) -> ModelInfo:
         created_at=model.created_at,
         metrics=model.metrics,
     )
+
+
+def _resolve_model(db: Session, model_id: int | None, model_name: str | None):
+    if model_id is not None:
+        model = get_model_by_id(db, model_id)
+        if model:
+            return model
+        raise_api_error(404, "MODEL_NOT_FOUND", "Model not found")
+    if model_name:
+        model = get_model_by_name(db, model_name)
+        if model:
+            return model
+        raise_api_error(404, "MODEL_NOT_FOUND", "Model not found")
+    models = get_all_models(db)
+    if not models:
+        raise_api_error(404, "MODEL_NOT_FOUND", "No models available")
+    return models[0]
+
+
+def _compute_accuracy_pct(predicted: float, actual: float) -> float | None:
+    if actual == 0:
+        return None
+    return max(0.0, 1.0 - abs(predicted - actual) / actual) * 100.0
+
+
+def _generate_model_name(config: TrainingConfig, prefix: str | None) -> str:
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    parts = [
+        prefix or "model",
+        config.model_type,
+        f"ctx{config.context_length}",
+        f"h{config.horizon}",
+        f"hs{config.hidden_size}",
+        f"l{config.num_layers}",
+        f"pl{config.patch_length}",
+        f"st{config.stride}",
+        f"lr{config.learning_rate:g}",
+        timestamp,
+    ]
+    return "_".join(parts)
+
+
+def _run_training_job(job_id: int, model_name: str, request: TrainingRequest) -> None:
+    settings = get_settings()
+    db = get_db_manager()
+    now = datetime.now(tz=timezone.utc)
+    with db.session() as session:
+        update_training_job(session, job_id, status="running", started_at=now)
+
+    try:
+        device = request.device or settings.train_device
+        config = TrainingConfig(
+            model_type=request.model_type,
+            context_length=request.context_length,
+            horizon=1,
+            hidden_size=request.hidden_size,
+            num_layers=request.num_layers,
+            patch_length=request.patch_length,
+            stride=request.stride,
+            learning_rate=request.learning_rate,
+            batch_size=request.batch_size,
+            epochs=request.epochs,
+            device=device,
+            freq="H",
+            data_frequency="1hour",
+            max_vram_gb=request.max_vram_gb,
+            loss_type=request.loss_type,
+        )
+        if request.horizon_hours != 24:
+            raise ValueError("training only supports 24h horizon for now")
+
+        with db.session() as session:
+            if request.multi_asset:
+                features_df, _ = prepare_training_data_multi(
+                    session,
+                    symbols=request.symbols,
+                    normalize=False,
+                )
+                unique_id_col = "symbol"
+            else:
+                symbol = (request.symbols or [settings.data_symbol])[0]
+                features_df, _ = prepare_training_data(
+                    session,
+                    normalize=False,
+                    symbol=symbol,
+                )
+                unique_id_col = None
+
+        if features_df.empty:
+            raise ValueError("no features available for training")
+
+        features_df = features_df.dropna().reset_index(drop=True)
+        features_df = add_return_24h_target(features_df)
+        features_df = features_df.dropna().reset_index(drop=True)
+        if features_df.empty:
+            raise ValueError("no valid rows after return_24h target")
+
+        val_size = max(int(len(features_df) * settings.train_validation_split), 30)
+        train_split = features_df.iloc[:-val_size].reset_index(drop=True)
+        val_split = features_df.iloc[-val_size:].reset_index(drop=True)
+        if train_split.empty or val_split.empty:
+            raise ValueError("insufficient data for train/val split")
+
+        feature_cols = [col for col in FORECAST_FEATURES if col in train_split.columns]
+        model_dir = Path(settings.model_dir) / model_name
+
+        result = train_model(
+            config,
+            train_split,
+            val_split,
+            model_dir=model_dir,
+            target_col="return_24h",
+            force_simple=False,
+            feature_cols=feature_cols,
+            save_artifacts=True,
+            keep_best=False,
+            unique_id_col=unique_id_col,
+        )
+
+        train_start = pd.to_datetime(train_split["timestamp"].min(), utc=True).to_pydatetime()
+        train_end = pd.to_datetime(train_split["timestamp"].max(), utc=True).to_pydatetime()
+        val_start = pd.to_datetime(val_split["timestamp"].min(), utc=True).to_pydatetime()
+        val_end = pd.to_datetime(val_split["timestamp"].max(), utc=True).to_pydatetime()
+
+        with db.session() as session:
+            model = create_model(
+                session,
+                name=model_name,
+                model_type=config.model_type,
+                version="1.0",
+                file_path=str(result.model_path),
+                scaler_path=None,
+                config=config.to_dict(),
+                train_start=train_start,
+                train_end=train_end,
+                val_start=val_start,
+                val_end=val_end,
+                metrics=result.metrics,
+            )
+            update_training_job(
+                session,
+                job_id,
+                status="completed",
+                finished_at=datetime.now(tz=timezone.utc),
+                model_id=model.id,
+                metrics=result.metrics,
+            )
+    except Exception as exc:
+        with db.session() as session:
+            update_training_job(
+                session,
+                job_id,
+                status="failed",
+                finished_at=datetime.now(tz=timezone.utc),
+                error=str(exc),
+            )
+
+
+@router.post("/trainings", response_model=TrainingJobResponse)
+async def create_training(
+    request: TrainingRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> TrainingJobResponse:
+    model_name = _generate_model_name(
+        TrainingConfig(
+            model_type=request.model_type,
+            context_length=request.context_length,
+            horizon=1,
+            hidden_size=request.hidden_size,
+            num_layers=request.num_layers,
+            patch_length=request.patch_length,
+            stride=request.stride,
+            learning_rate=request.learning_rate,
+            batch_size=request.batch_size,
+            epochs=request.epochs,
+            device=request.device or get_settings().train_device,
+            freq="H",
+            data_frequency="1hour",
+            max_vram_gb=request.max_vram_gb,
+            loss_type=request.loss_type,
+        ),
+        request.name_prefix,
+    )
+    job = create_training_job(db, model_name=model_name, config=request.model_dump())
+    background_tasks.add_task(_run_training_job, job.id, job.model_name, request)
+    return TrainingJobResponse(
+        id=job.id,
+        status=job.status,
+        model_name=job.model_name,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        metrics=job.metrics,
+        error=job.error,
+        model_id=job.model_id,
+    )
+
+
+@router.get("/trainings/{job_id}", response_model=TrainingJobResponse)
+async def training_status(job_id: int, db: Session = Depends(get_db)) -> TrainingJobResponse:
+    job = get_training_job(db, job_id)
+    if not job:
+        raise_api_error(404, "TRAINING_JOB_NOT_FOUND", "Training job not found")
+    return TrainingJobResponse(
+        id=job.id,
+        status=job.status,
+        model_name=job.model_name,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        metrics=job.metrics,
+        error=job.error,
+        model_id=job.model_id,
+    )
+
+
+@router.get("/trainings", response_model=list[TrainingJobResponse])
+async def list_trainings(db: Session = Depends(get_db)) -> list[TrainingJobResponse]:
+    jobs = list_training_jobs(db)
+    return [
+        TrainingJobResponse(
+            id=job.id,
+            status=job.status,
+            model_name=job.model_name,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            metrics=job.metrics,
+            error=job.error,
+            model_id=job.model_id,
+        )
+        for job in jobs
+    ]
 
 
 @router.post("/predict", response_model=PredictionResponse)
@@ -187,6 +450,176 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)) -> 
         position_size=position_size,
         conviction=conviction,
     )
+
+
+@router.post("/forecast/predict", response_model=ForecastPredictResponse)
+async def forecast_predict(
+    request: ForecastPredictRequest, db: Session = Depends(get_db)
+) -> ForecastPredictResponse:
+    if request.hours != 24:
+        raise_api_error(400, "INVALID_HORIZON", "hours must be 24 for this model")
+
+    model = _resolve_model(db, request.model_id, request.model_name)
+    bundle = load_model_artifacts(Path(model.file_path).parent)
+    config_meta = bundle.metadata.get("config", {})
+    context_length = int(config_meta.get("context_length", 168))
+
+    normalize_cols = get_feature_columns()
+    if "return" in normalize_cols:
+        normalize_cols = [col for col in normalize_cols if col != "return"]
+    normalize_cols.append("log_close")
+    normalize_cols = list(dict.fromkeys(normalize_cols))
+
+    required_history = context_length + 24 + 30
+    fetch_hours = required_history + 720
+    candles = fetch_recent_hourly_candles(request.symbol, fetch_hours)
+    if not candles:
+        raise_api_error(400, "CANDLES_NOT_FOUND", "No candles available for symbol")
+
+    symbol_df, normalizer = build_recent_feature_df_from_candles(
+        candles, required_history, normalize_cols
+    )
+    if symbol_df.empty:
+        raise_api_error(400, "FEATURES_NOT_FOUND", "No features available for symbol")
+    symbol_df = symbol_df.dropna().reset_index(drop=True)
+    symbol_df = add_return_24h_target(symbol_df)
+    symbol_df = symbol_df.dropna().reset_index(drop=True)
+
+    if len(symbol_df) < context_length:
+        raise_api_error(
+            400,
+            "INSUFFICIENT_HISTORY",
+            "Not enough history for prediction",
+            {"available": len(symbol_df), "required": context_length},
+        )
+
+    history_df = symbol_df.tail(context_length).reset_index(drop=True)
+    last_timestamp = pd.to_datetime(history_df["timestamp"].iloc[-1], utc=True).to_pydatetime()
+    current_price = float(history_df["close"].iloc[-1])
+    log_close_std = 1.0
+    if normalizer and "log_close" in normalizer._feature_stats:
+        log_close_std = normalizer._feature_stats["log_close"].get("std", 1.0)
+
+    predicted_at = datetime.now(tz=timezone.utc)
+    min_cached_at = predicted_at - timedelta(hours=1)
+    cache_hit = False
+
+    cached = None
+    if request.use_cache:
+        cached = get_cached_forecast_prediction(
+            db,
+            model_id=model.id,
+            symbol=request.symbol,
+            horizon_hours=request.hours,
+            data_timestamp=last_timestamp,
+            min_predicted_at=min_cached_at,
+        )
+
+    if cached:
+        cache_hit = True
+        predicted_close = float(cached.predicted_close)
+        target_timestamp = cached.target_timestamp
+        predicted_at = cached.predicted_at
+    else:
+        feature_cols = [col for col in FORECAST_FEATURES if col in history_df.columns]
+        preds = forecast_next_horizon(
+            bundle.model,
+            history_df,
+            target_col="return_24h",
+            feature_cols=feature_cols,
+            horizon=1,
+        )
+        pred_return = float(preds[-1])
+        pred_log_close = float(history_df["log_close"].iloc[-1]) + (pred_return * log_close_std)
+        predicted_close = float(np.exp(pred_log_close))
+        target_timestamp = build_future_timestamps(last_timestamp, request.hours)[-1]
+
+        record = create_forecast_prediction(
+            db,
+            model_id=model.id,
+            symbol=request.symbol,
+            horizon_hours=request.hours,
+            data_timestamp=last_timestamp,
+            target_timestamp=target_timestamp,
+            predicted_at=predicted_at,
+            predicted_close=Decimal(str(predicted_close)),
+            predicted_direction=(
+                "UP" if predicted_close > current_price else "DOWN" if predicted_close < current_price else "FLAT"
+            ),
+        )
+
+    actual_price = None
+    accuracy_pct = None
+    actual = get_candle_by_timestamp(db, target_timestamp, symbol=request.symbol)
+    if actual:
+        actual_price = float(actual.close)
+        accuracy_pct = _compute_accuracy_pct(predicted_close, actual_price)
+        if cached and cached.actual_close is None and accuracy_pct is not None:
+            update_forecast_prediction_actuals(
+                db,
+                cached.id,
+                actual_close=Decimal(str(actual_price)),
+                accuracy_pct=Decimal(str(accuracy_pct)),
+            )
+        if not cached and accuracy_pct is not None:
+            update_forecast_prediction_actuals(
+                db,
+                record.id,
+                actual_close=Decimal(str(actual_price)),
+                accuracy_pct=Decimal(str(accuracy_pct)),
+            )
+
+    price_change = predicted_close - current_price
+    price_change_pct = (price_change / current_price * 100.0) if current_price else 0.0
+    direction = "UP" if price_change > 0 else "DOWN" if price_change < 0 else "FLAT"
+
+    return ForecastPredictResponse(
+        symbol=request.symbol,
+        hours=request.hours,
+        model_id=model.id,
+        model_name=model.name,
+        data_timestamp=last_timestamp,
+        target_timestamp=target_timestamp,
+        predicted_at=predicted_at,
+        current_price=current_price,
+        predicted_price=predicted_close,
+        price_change=price_change,
+        price_change_pct=price_change_pct,
+        direction=direction,
+        cache_hit=cache_hit,
+        actual_price=actual_price,
+        accuracy_pct=accuracy_pct,
+    )
+
+
+@router.get("/forecast/history/{symbol}", response_model=list[ForecastHistoryItem])
+async def forecast_history(
+    symbol: str,
+    model_id: int | None = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+) -> list[ForecastHistoryItem]:
+    predictions = get_forecast_predictions(db, symbol=symbol, model_id=model_id, limit=limit)
+    items: list[ForecastHistoryItem] = []
+    for pred in predictions:
+        model = pred.model
+        actual_price = float(pred.actual_close) if pred.actual_close is not None else None
+        accuracy_pct = float(pred.accuracy_pct) if pred.accuracy_pct is not None else None
+        items.append(
+            ForecastHistoryItem(
+                symbol=pred.symbol,
+                hours=pred.horizon_hours,
+                model_id=pred.model_id,
+                model_name=model.name if model else "unknown",
+                data_timestamp=pred.data_timestamp,
+                target_timestamp=pred.target_timestamp,
+                predicted_at=pred.predicted_at,
+                predicted_price=float(pred.predicted_close),
+                actual_price=actual_price,
+                accuracy_pct=accuracy_pct,
+            )
+        )
+    return items
 
 
 @router.get("/predictions/latest", response_model=list[PredictionResponse])

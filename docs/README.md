@@ -4,3 +4,4 @@ Index
 - docs/postgres-setup.md
 - docs/kucoin-backfill.md
 - docs/training-workflow.md
+- docs/api.md
