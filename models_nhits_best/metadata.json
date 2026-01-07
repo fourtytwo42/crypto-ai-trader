@@ -1,0 +1,65 @@
+{
+  "config": {
+    "model_type": "nhits",
+    "context_length": 336,
+    "horizon": 1,
+    "hidden_size": 512,
+    "num_layers": 3,
+    "patch_length": 8,
+    "stride": 4,
+    "learning_rate": 5e-05,
+    "batch_size": 16,
+    "epochs": 50,
+    "device": "cuda",
+    "freq": "H",
+    "max_vram_gb": 23.0,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ],
+    "horizon_weight": null,
+    "loss_type": "huber",
+    "data_frequency": "1hour",
+    "nhits_stack_types": [
+      "identity",
+      "identity",
+      "identity"
+    ],
+    "nhits_n_blocks": [
+      3,
+      2,
+      2
+    ],
+    "nhits_mlp_units": [
+      [
+        768,
+        768
+      ],
+      [
+        768,
+        768
+      ],
+      [
+        768,
+        768
+      ]
+    ],
+    "nhits_n_pool_kernel_size": [
+      2,
+      2,
+      1
+    ],
+    "nhits_n_freq_downsample": [
+      4,
+      2,
+      1
+    ]
+  },
+  "metrics": {
+    "mae": 0.5970209535892597,
+    "rmse": 0.5970209535892597,
+    "mape": 0.6819243851746793
+  },
+  "scaler_path": null
+}

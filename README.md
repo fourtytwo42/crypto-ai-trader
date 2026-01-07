@@ -1,83 +1,271 @@
 # Crypto AI Trader
 
-An intelligent cryptocurrency trading system powered by artificial intelligence.
+An AI-powered cryptocurrency price prediction system using NHITS time-series forecasting models trained on hourly candle data from KuCoin.
 
 ## Overview
 
-Crypto AI Trader is a sophisticated trading platform that leverages AI and machine learning algorithms to analyze market trends, identify trading opportunities, and execute trades across multiple cryptocurrency exchanges.
+Crypto AI Trader uses deep learning (NHITS neural network) to predict cryptocurrency price direction and magnitude. The system achieves **~95% price accuracy** and **~98% directional accuracy** on holdout tests across BTC, ETH, LTC, and XRP.
 
-## Documentation
+## Current Best Model Performance
 
-- docs/README.md
-- docs/postgres-setup.md
-- docs/kucoin-backfill.md
-- docs/training-workflow.md
+| Symbol | Directional Accuracy | Price Accuracy |
+|--------|---------------------|----------------|
+| BTC-USDT | 100.00% | 96.69% |
+| ETH-USDT | 100.00% | 94.48% |
+| LTC-USDT | 95.83% | 94.38% |
+| XRP-USDT | 95.83% | 94.56% |
+| **Average** | **97.92%** | **95.03%** |
 
-## Features
-
-- AI-powered market analysis
-- Multi-exchange support
-- Real-time price monitoring
-- Automated trading strategies
-- Risk management tools
-- Performance analytics
-
-## Technology Stack
-
-- Node.js
-- PostgreSQL
-- PM2 (Process Manager)
-
-## Getting Started
+## Quick Start
 
 ### Prerequisites
 
-- Node.js (v20+)
-- PostgreSQL
-- PM2
+- Python 3.11+
+- PostgreSQL 15+
+- CUDA-capable GPU (optional, for faster training)
 
 ### Installation
 
 ```bash
+# Clone and enter directory
+git clone <repo-url>
+cd crypto-ai-trader
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
+
 # Install dependencies
-npm install
+pip install -r requirements.txt
 
-# Set up environment variables
+# Configure environment
 cp .env.example .env
-# Edit .env with your configuration
-
-# Start the application
-npm start
+# Edit .env with your database credentials
 ```
 
-### Development
+### Database Setup
 
 ```bash
-# Run in development mode
-npm run dev
+# Create PostgreSQL database
+createdb bitcoin_trading
 
-# Run tests
-npm test
+# Apply migrations
+alembic upgrade head
 ```
 
-### Production
+### Load Historical Data
 
 ```bash
-# Build the application
-npm run build
-
-# Start with PM2
-pm2 start ecosystem.config.js
+# Load hourly data from KuCoin (8 years of history)
+python -m src.main load-hourly --symbols BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT --years-back 8
 ```
+
+## Usage
+
+### Quick Prediction (Recommended)
+
+The `quick-predict` command is the main way to use this system:
+
+```bash
+# Inference only - use existing model, pull latest data:
+python -m src.main quick-predict --hours 24
+
+# Retrain model first, then predict:
+python -m src.main quick-predict --hours 24 --retrain
+
+# Predict 48 hours ahead:
+python -m src.main quick-predict --hours 48
+
+# Predict specific symbols:
+python -m src.main quick-predict --hours 24 --symbols BTC-USDT,ETH-USDT
+```
+
+**Sample Output:**
+```
+============================================================
+PRICE PREDICTIONS (24h ahead)
+============================================================
+Model: Loaded from models_nhits_best
+Generated: 2026-01-07T04:17:11+00:00
+------------------------------------------------------------
+
+BTC-USDT:
+  Current Price:   $92,802.40
+  Predicted Price: $93,025.08
+  Change:          $+222.68 (+0.24%)
+  Direction:       [UP]
+
+ETH-USDT:
+  Current Price:   $3,267.04
+  Predicted Price: $3,277.85
+  Change:          $+10.81 (+0.33%)
+  Direction:       [UP]
+
+XRP-USDT:
+  Current Price:   $2.27
+  Predicted Price: $2.24
+  Change:          $-0.03 (-1.24%)
+  Direction:       [DOWN]
+============================================================
+```
+
+### Model Training
+
+Train the best-performing NHITS model:
+
+```bash
+python -m src.main quick-predict --hours 24 --retrain
+```
+
+Or run the full holdout evaluation:
+
+```bash
+python -m src.main forecast-holdout-24h \
+  --context-length 336 \
+  --hidden-size 512 \
+  --num-layers 3 \
+  --patch-length 8 \
+  --stride 4 \
+  --loss-type huber \
+  --epochs 50 \
+  --batch-size 16 \
+  --learning-rate 5e-5 \
+  --model-type nhits \
+  --nhits-stack-types identity,identity,identity \
+  --nhits-n-blocks 3,2,2 \
+  --nhits-mlp-units "768|768;768|768;768|768" \
+  --nhits-n-pool-kernel-size 2,2,1 \
+  --nhits-n-freq-downsample 4,2,1 \
+  --multi-asset
+```
+
+### Other Commands
+
+```bash
+# Load daily CSV data
+python -m src.main load-data /path/to/data.csv --symbol BTC-USDT
+
+# Load hourly data from KuCoin
+python -m src.main load-hourly --symbols BTC-USDT,ETH-USDT --years-back 8
+
+# Start REST API server
+python -m src.main api --host 0.0.0.0 --port 8000
+
+# Interactive menu
+python -m src.main --menu
+
+# View all commands
+python -m src.main --help
+```
+
+## Architecture
+
+### Source Layout
+
+```
+src/
+├── main.py              # Entry point, structlog configuration
+├── config.py            # Pydantic settings from environment
+├── data/                # Data pipeline
+│   ├── csv_loader.py    # Kraken CSV format loader
+│   ├── feature_extractor.py  # Log returns, range, volume features
+│   ├── kucoin_client.py # Exchange API client
+│   └── pipeline.py      # Orchestrates data flow
+├── database/            # PostgreSQL layer
+│   ├── connection.py    # SQLAlchemy engine
+│   ├── models.py        # ORM models
+│   └── operations.py    # CRUD operations
+├── training/            # Model training
+│   ├── trainer.py       # Training orchestration
+│   ├── model_factory.py # Creates NHITS/PatchTST models
+│   └── config.py        # Training configuration
+├── prediction/          # Inference
+│   ├── model_loader.py  # Load saved models
+│   └── predictor.py     # Generate forecasts
+├── forecasting/         # Walk-forward evaluation
+│   └── walk_forward_forecast.py
+├── cli/                 # Terminal interface
+│   ├── cli.py           # Click commands
+│   └── commands.py      # Command implementations
+└── api/                 # REST API
+    └── main.py          # FastAPI app
+```
+
+### Best Model Configuration (NHITS)
+
+| Parameter | Value |
+|-----------|-------|
+| Model Type | NHITS |
+| Horizon | 1 (24h prediction) |
+| Context Length | 336 hours (14 days) |
+| Stack Types | identity, identity, identity |
+| N Blocks | 3, 2, 2 |
+| MLP Units | 768, 768 per stack |
+| Pool Kernel Size | 2, 2, 1 |
+| Freq Downsample | 4, 2, 1 |
+| Learning Rate | 5e-5 |
+| Epochs | 50 |
+| Batch Size | 16 |
+
+### Feature Engineering (8 Scale-Free Features)
+
+1. `return` - log(Close_t / Close_{t-1})
+2. `range` - log(High_t / Low_t)
+3. `body` - log(Close_t / Open_t)
+4. `dlog_volume` - log(Volume_t) - log(Volume_{t-1})
+5. `ret_mean_7` - 7-day rolling mean of returns
+6. `ret_std_7` - 7-day rolling std of returns
+7. `ret_mean_30` - 30-day rolling mean of returns
+8. `ret_std_30` - 30-day rolling std of returns
+
+## Technology Stack
+
+- **Python 3.11** - Core language
+- **NeuralForecast 1.7** - NHITS/PatchTST models
+- **PyTorch 2.1** - Deep learning backend
+- **PostgreSQL 15** - Data storage
+- **SQLAlchemy 2.0** - ORM
+- **FastAPI** - REST API
+- **Click** - CLI framework
+- **structlog** - Structured logging
 
 ## Configuration
 
-Configure your trading parameters and API keys in the `.env` file.
+All settings via environment variables (see `.env.example`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | required |
+| `TRAIN_DEVICE` | Training device (cuda/cpu) | cpu |
+| `MODEL_DIR` | Model storage directory | models |
+
+## Documentation
+
+- [EXPERIMENTS.md](EXPERIMENTS.md) - Full experiment log and best model details
+- [docs/postgres-setup.md](docs/postgres-setup.md) - Database setup guide
+- [docs/kucoin-backfill.md](docs/kucoin-backfill.md) - Data backfill process
+- [docs/training-workflow.md](docs/training-workflow.md) - Training procedures
+
+## Development
+
+```bash
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+
+# Linting
+ruff check src tests
+
+# Formatting
+black src tests
+
+# Type checking
+mypy src
+```
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.

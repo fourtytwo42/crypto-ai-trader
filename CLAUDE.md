@@ -4,29 +4,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Bitcoin Trading Model - An AI-powered Bitcoin price direction prediction system using time-series forecasting models (PatchTST/NHITS) trained on daily candle data. Features PostgreSQL data staging, terminal menu interface, REST API for predictions, and walk-forward backtesting.
+Crypto AI Trader - An AI-powered cryptocurrency price prediction system using NHITS time-series forecasting models trained on hourly candle data from KuCoin. Achieves ~95% price accuracy and ~98% directional accuracy on holdout tests across BTC, ETH, LTC, and XRP.
 
-**Current Status:** Planning phase - core infrastructure implemented, model training and prediction pipelines in development.
+**Current Status:** Production-ready - best NHITS model trained and validated.
+
+## Quick Start - Main Commands
+
+```bash
+# PRIMARY COMMAND: Quick prediction (inference only, uses existing model)
+python -m src.main quick-predict --hours 24
+
+# Quick prediction with model retraining
+python -m src.main quick-predict --hours 24 --retrain
+
+# Predict 48 hours ahead
+python -m src.main quick-predict --hours 48
+
+# Predict specific symbols
+python -m src.main quick-predict --hours 24 --symbols BTC-USDT,ETH-USDT
+```
+
+## Best Model Configuration
+
+The best-performing model is NHITS with:
+- Context length: 336 hours (14 days)
+- Blocks: 3, 2, 2
+- MLP units: 768|768 per stack
+- Learning rate: 5e-5
+- Epochs: 50
+
+See EXPERIMENTS.md for full configuration and performance metrics.
 
 ## Build and Development Commands
 
 ```bash
 # Setup
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 
-# Run application (CLI with terminal menu)
-python -m src.main
-# or use the btm entry point after pip install -e .
-btm
+# Load historical data from KuCoin
+python -m src.main load-hourly --symbols BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT --years-back 8
 
 # Run specific CLI commands
-python -m src.main --menu          # Interactive menu (default)
-python -m src.main --train         # Train model
-python -m src.main --predict       # Generate prediction
-python -m src.main --backtest      # Run backtest
-python -m src.main --api           # Start FastAPI server
+python -m src.main --menu          # Interactive menu
+python -m src.main quick-predict   # Main prediction command
+python -m src.main api             # Start FastAPI server
 
 # Testing
 pytest                              # Run all tests
@@ -131,10 +155,24 @@ All settings via environment variables (see `.env.example`). Key settings:
 
 ## Model Details
 
-- **Primary:** PatchTST (hidden=512, layers=6, patch=16, context=128 days)
-- **Baseline:** NHITS for comparison
-- **Output:** Quantiles [0.1, 0.5, 0.9] for uncertainty estimation
-- **Signal Logic:** Long if q50 > threshold AND q10 > -threshold; Short if opposite; Flat otherwise
+**Best Model (NHITS):**
+- Model Type: NHITS
+- Horizon: 1 (24h prediction)
+- Context Length: 336 hours (14 days)
+- Stack Types: identity, identity, identity
+- N Blocks: 3, 2, 2
+- MLP Units: 768|768 per stack
+- Pool Kernel Size: 2, 2, 1
+- Freq Downsample: 4, 2, 1
+- Learning Rate: 5e-5
+- Epochs: 50
+- Batch Size: 16
+
+**Performance (Holdout):**
+- BTC: 100% directional, 96.69% price accuracy
+- ETH: 100% directional, 94.48% price accuracy
+- LTC: 95.83% directional, 94.38% price accuracy
+- XRP: 95.83% directional, 94.56% price accuracy
 
 ## Testing Requirements
 

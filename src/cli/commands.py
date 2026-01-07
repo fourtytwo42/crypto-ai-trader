@@ -714,6 +714,265 @@ def load_hourly_data_command(
         )
 
 
+def quick_predict_command(
+    hours: int = 24,
+    retrain: bool = False,
+    symbols: list[str] | None = None,
+    model_dir: str = "models_nhits_best",
+) -> dict[str, object]:
+    """Pull latest data, optionally retrain, and predict price direction.
+
+    This command:
+    1. Fetches the latest candle data from KuCoin for all symbols
+    2. Updates the database with new candles
+    3. Optionally retrains the NHITS model with the best configuration
+    4. Generates predictions for the specified number of hours ahead
+
+    Args:
+        hours: Number of hours to predict (24, 48, etc.)
+        retrain: If True, retrain the model before prediction
+        symbols: List of symbols to predict (default: BTC-USDT, ETH-USDT, LTC-USDT, XRP-USDT)
+        model_dir: Directory to save/load model
+
+    Returns:
+        Dictionary with predictions for each symbol
+    """
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    settings = get_settings()
+
+    # Default symbols
+    if symbols is None:
+        symbols = ["BTC-USDT", "ETH-USDT", "LTC-USDT", "XRP-USDT"]
+
+    # Step 1: Pull latest data from KuCoin
+    logger.info("Fetching latest candles from KuCoin", symbols=symbols)
+    db = get_db_manager()
+
+    for symbol in symbols:
+        with db.session() as session:
+            pipeline = DataPipeline(session)
+            # Pull last 48 hours to ensure we have fresh data
+            loaded = pipeline.load_kucoin_hourly_to_database(
+                symbol=symbol,
+                hours_back=48,
+                replace_existing=False,
+            )
+            logger.info("Updated candles", symbol=symbol, new_candles=loaded)
+
+    # Step 2: Optionally retrain the model
+    if retrain:
+        logger.info("Retraining NHITS model with best configuration")
+
+        # Best model configuration
+        config = TrainingConfig(
+            model_type="nhits",
+            horizon=1,
+            device=settings.train_device,
+            data_frequency="1hour",
+            context_length=336,
+            hidden_size=512,
+            num_layers=3,
+            patch_length=8,
+            stride=4,
+            loss_type="huber",
+            epochs=50,
+            batch_size=16,
+            learning_rate=5e-5,
+            nhits_stack_types=["identity", "identity", "identity"],
+            nhits_n_blocks=[3, 2, 2],
+            nhits_mlp_units=[[768, 768], [768, 768], [768, 768]],
+            nhits_n_pool_kernel_size=[2, 2, 1],
+            nhits_n_freq_downsample=[4, 2, 1],
+        )
+
+        with db.session() as session:
+            normalize_cols = get_feature_columns()
+            if "return" in normalize_cols:
+                normalize_cols = [col for col in normalize_cols if col != "return"]
+            normalize_cols.append("log_close")
+            normalize_cols = list(dict.fromkeys(normalize_cols))
+
+            features_df, _ = prepare_training_data_multi(
+                session,
+                symbols=symbols,
+                normalize=True,
+                normalize_cols=normalize_cols,
+            )
+
+        if features_df.empty:
+            raise ValueError("No features available for training")
+
+        features_df = features_df.dropna().reset_index(drop=True)
+        features_df = _add_return_24h_target(features_df)
+        features_df = features_df.dropna().reset_index(drop=True)
+
+        # Split data: train on all but last 48 hours
+        train_frames = []
+        for symbol in symbols:
+            symbol_df = features_df[features_df["symbol"] == symbol].copy()
+            symbol_df = symbol_df.sort_values("timestamp").reset_index(drop=True)
+            if len(symbol_df) > 48:
+                train_frames.append(symbol_df.iloc[:-48].reset_index(drop=True))
+
+        if not train_frames:
+            raise ValueError("Insufficient data for training")
+
+        train_df = pd.concat(train_frames, ignore_index=True)
+        val_size = max(int(len(train_df) * settings.train_validation_split), 30)
+        train_split = train_df.iloc[:-val_size].reset_index(drop=True)
+        val_split = train_df.iloc[-val_size:].reset_index(drop=True)
+
+        feature_cols = [col for col in FORECAST_FEATURES if col in train_df.columns]
+
+        result = train_model(
+            config,
+            train_split,
+            val_split,
+            model_dir=model_dir,
+            target_col="return_24h",
+            force_simple=False,
+            feature_cols=feature_cols,
+            save_artifacts=True,
+            keep_best=True,
+            unique_id_col="symbol",
+        )
+        logger.info("Training complete", metrics=result.metrics)
+        trained_model = result.model
+    else:
+        # Load existing model
+        model_path = Path(model_dir) / "model.pt"
+        if not model_path.exists():
+            raise ValueError(
+                f"No trained model found at {model_dir}. "
+                "Run with --retrain to train a new model first."
+            )
+        bundle = load_model_artifacts(model_dir)
+        trained_model = bundle.model
+        logger.info("Loaded existing model", model_dir=model_dir)
+
+    # Step 3: Generate predictions
+    logger.info("Generating predictions", hours=hours, symbols=symbols)
+
+    # Get normalized features for prediction (same as holdout evaluation)
+    with db.session() as session:
+        normalize_cols = get_feature_columns()
+        if "return" in normalize_cols:
+            normalize_cols = [col for col in normalize_cols if col != "return"]
+        normalize_cols.append("log_close")
+        normalize_cols = list(dict.fromkeys(normalize_cols))
+
+        features_df, normalizers = prepare_training_data_multi(
+            session,
+            symbols=symbols,
+            normalize=True,
+            normalize_cols=normalize_cols,
+        )
+
+        # Get actual current prices from raw candle data
+        from src.database.operations import get_all_candles
+        raw_prices: dict[str, float] = {}
+        raw_timestamps: dict[str, str] = {}
+        for symbol in symbols:
+            candles = get_all_candles(session, symbol=symbol)
+            if candles:
+                latest_candle = max(candles, key=lambda c: c.timestamp)
+                raw_prices[symbol] = float(latest_candle.close)
+                raw_timestamps[symbol] = str(latest_candle.timestamp)
+
+    features_df = features_df.dropna().reset_index(drop=True)
+    features_df = _add_return_24h_target(features_df)
+    features_df = features_df.dropna().reset_index(drop=True)
+
+    feature_cols = [col for col in FORECAST_FEATURES if col in features_df.columns]
+
+    predictions: dict[str, dict[str, object]] = {}
+
+    for symbol in symbols:
+        symbol_df = features_df[features_df["symbol"] == symbol].copy()
+        symbol_df = symbol_df.sort_values("timestamp").reset_index(drop=True)
+
+        if len(symbol_df) < 336:
+            logger.warning("Insufficient data for prediction", symbol=symbol)
+            continue
+
+        # Get the last context_length rows for prediction
+        history_df = symbol_df.tail(336).reset_index(drop=True)
+        last_timestamp = history_df["timestamp"].iloc[-1]
+
+        # Get actual price for display
+        actual_current_price = raw_prices.get(symbol, 0.0)
+
+        # Get normalizer std for log_close to convert prediction back to real space
+        log_close_std = 1.0
+        if normalizers and symbol in normalizers:
+            norm = normalizers[symbol]
+            if hasattr(norm, '_feature_stats') and 'log_close' in norm._feature_stats:
+                log_close_std = norm._feature_stats['log_close'].get('std', 1.0)
+                logger.debug("Got log_close std", symbol=symbol, std=log_close_std)
+
+        # Generate predictions using the same methodology as holdout
+        cumulative_normalized_return = 0.0
+        num_predictions = max(1, hours // 24)
+
+        for i in range(num_predictions):
+            preds = forecast_next_horizon(
+                trained_model,
+                history_df,
+                target_col="return_24h",
+                feature_cols=feature_cols,
+                horizon=1,
+            )
+            pred_return = float(np.asarray(preds, dtype=float)[-1])
+            cumulative_normalized_return += pred_return
+
+            if i < num_predictions - 1:
+                history_df = history_df.iloc[24:].reset_index(drop=True)
+                if len(history_df) < 336:
+                    break
+
+        # Convert normalized return back to actual log return
+        # normalized_return = actual_log_return / std
+        # so actual_log_return = normalized_return * std
+        actual_log_return = cumulative_normalized_return * log_close_std
+
+        # Convert log return to percentage change
+        # log_return = log(price_new / price_old)
+        # price_new / price_old = exp(log_return)
+        # pct_change = (exp(log_return) - 1) * 100
+        price_change_ratio = float(np.exp(actual_log_return))
+        price_change_pct = (price_change_ratio - 1) * 100
+
+        # Apply to actual price
+        predicted_price = actual_current_price * price_change_ratio
+        price_change = predicted_price - actual_current_price
+
+        if price_change_pct > 0:
+            direction = "UP"
+        elif price_change_pct < 0:
+            direction = "DOWN"
+        else:
+            direction = "FLAT"
+
+        predictions[symbol] = {
+            "current_price": round(actual_current_price, 2),
+            "predicted_price": round(predicted_price, 2),
+            "price_change": round(price_change, 2),
+            "price_change_pct": round(price_change_pct, 2),
+            "direction": direction,
+            "prediction_hours": hours,
+            "last_data_timestamp": raw_timestamps.get(symbol, str(last_timestamp)),
+        }
+
+    return {
+        "predictions": predictions,
+        "retrained": retrain,
+        "model_dir": model_dir,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def menu_command() -> None:
     """Launch interactive menu."""
     from src.cli.menu import run_menu

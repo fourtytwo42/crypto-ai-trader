@@ -16,6 +16,7 @@ from src.cli.commands import (
     load_hourly_data_command,
     menu_command,
     predict_command,
+    quick_predict_command,
     train_command,
 )
 
@@ -411,6 +412,103 @@ def forecast_holdout_24h(
         multi_asset=multi_asset,
     )
     click.echo(f"Holdout 24h metrics: {result}")
+
+
+@cli.command("quick-predict")
+@click.option(
+    "--hours",
+    type=int,
+    default=24,
+    help="Number of hours to predict ahead (24, 48, 72, etc.)",
+)
+@click.option(
+    "--retrain",
+    is_flag=True,
+    help="Retrain the model before prediction. If not set, uses existing model.",
+)
+@click.option(
+    "--symbols",
+    default=None,
+    help="Comma-separated symbols (default: BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT)",
+)
+@click.option(
+    "--model-dir",
+    default="models_nhits_best",
+    help="Directory to save/load model",
+)
+def quick_predict(
+    hours: int,
+    retrain: bool,
+    symbols: str | None,
+    model_dir: str,
+) -> None:
+    """Fetch latest data, optionally retrain, and predict prices.
+
+    This is the main prediction command that:
+
+    \b
+    1. Pulls the latest candle data from KuCoin
+    2. Updates the database with new candles
+    3. Optionally retrains the NHITS model (--retrain)
+    4. Outputs price predictions for all symbols
+
+    \b
+    Examples:
+      # Quick prediction using existing model (inference only):
+      python -m src.main quick-predict --hours 24
+
+    \b
+      # Retrain model first, then predict:
+      python -m src.main quick-predict --hours 24 --retrain
+
+    \b
+      # Predict 48 hours ahead:
+      python -m src.main quick-predict --hours 48
+
+    \b
+      # Predict specific symbols:
+      python -m src.main quick-predict --hours 24 --symbols BTC-USDT,ETH-USDT
+    """
+    symbol_list = None
+    if symbols:
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+
+    try:
+        result = quick_predict_command(
+            hours=hours,
+            retrain=retrain,
+            symbols=symbol_list,
+            model_dir=model_dir,
+        )
+
+        # Pretty print the results
+        click.echo("\n" + "=" * 60)
+        click.echo(f"PRICE PREDICTIONS ({hours}h ahead)")
+        click.echo("=" * 60)
+
+        if retrain:
+            click.echo(f"Model: Retrained (saved to {model_dir})")
+        else:
+            click.echo(f"Model: Loaded from {model_dir}")
+
+        click.echo(f"Generated: {result['generated_at']}")
+        click.echo("-" * 60)
+
+        predictions = result.get("predictions", {})
+        for symbol, pred in predictions.items():
+            direction_icon = "[UP]" if pred["direction"] == "UP" else "[DOWN]" if pred["direction"] == "DOWN" else "[FLAT]"
+            click.echo(f"\n{symbol}:")
+            click.echo(f"  Current Price:   ${pred['current_price']:,.2f}")
+            click.echo(f"  Predicted Price: ${pred['predicted_price']:,.2f}")
+            click.echo(f"  Change:          ${pred['price_change']:+,.2f} ({pred['price_change_pct']:+.2f}%)")
+            click.echo(f"  Direction:       {direction_icon}")
+            click.echo(f"  Last Data:       {pred['last_data_timestamp']}")
+
+        click.echo("\n" + "=" * 60)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
 
 
 @cli.command()

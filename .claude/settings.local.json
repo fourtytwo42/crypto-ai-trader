@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(python train_nhits_holdout.py:*)",
+      "Bash(.venvScriptsactivate)",
+      "Bash(venvScriptspython.exe train_nhits_holdout.py)",
+      "Bash(\"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/venv/Scripts/python.exe\" \"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/train_nhits_holdout.py\")",
+      "Bash(\"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/venv/Scripts/python.exe\" -m src.main:*)",
+      "Bash(\"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/venv/Scripts/python.exe\" -m src.main quick-predict:*)",
+      "Bash(\"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/venv/Scripts/python.exe\" -m src.main quick-predict --hours 24 --retrain)",
+      "Bash(\"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/venv/Scripts/python.exe\" -m src.main quick-predict --hours 24)",
+      "Bash(\"C:/Users/hendo420/OneDrive/Documents/GitHub/crypto-ai-trader/venv/Scripts/python.exe\" -c \"\nimport time\n\n# Test 1: Database connection\nstart = time.time\\(\\)\nfrom src.database.connection import get_db_manager\ndb = get_db_manager\\(\\)\nprint\\(f''DB connection: {time.time\\(\\)-start:.2f}s''\\)\n\n# Test 2: Load all candles \\(this is probably slow\\)\nstart = time.time\\(\\)\nwith db.session\\(\\) as session:\n    from src.database.operations import get_all_candles\n    candles = get_all_candles\\(session, symbol=''BTC-USDT''\\)\n    print\\(f''Load all BTC candles \\({len\\(candles\\)} rows\\): {time.time\\(\\)-start:.2f}s''\\)\n\n# Test 3: prepare_training_data_multi\nstart = time.time\\(\\)\nwith db.session\\(\\) as session:\n    from src.data.pipeline import prepare_training_data_multi\n    df, norm = prepare_training_data_multi\\(session, symbols=[''BTC-USDT''], normalize=True\\)\n    print\\(f''prepare_training_data_multi \\({len\\(df\\)} rows\\): {time.time\\(\\)-start:.2f}s''\\)\n\")"
+    ]
+  }
+}
