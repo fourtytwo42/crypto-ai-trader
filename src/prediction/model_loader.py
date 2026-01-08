@@ -17,6 +17,29 @@ class ModelBundle:
     scaler: object | None
 
 
+def _force_cpu_neuralforecast(model: object, torch_module) -> None:
+    """Ensure NeuralForecast trainer kwargs target the CPU when no GPU is available."""
+    if torch_module.cuda.is_available():
+        return
+    try:
+        from neuralforecast import NeuralForecast
+    except Exception:
+        return
+
+    if not isinstance(model, NeuralForecast):
+        return
+
+    for submodel in getattr(model, "models", []):
+        trainer_kwargs = getattr(submodel, "trainer_kwargs", None)
+        if not isinstance(trainer_kwargs, dict):
+            continue
+        if trainer_kwargs.get("accelerator") == "gpu":
+            trainer_kwargs["accelerator"] = "cpu"
+        precision = trainer_kwargs.get("precision")
+        if isinstance(precision, str) and "16" in precision:
+            trainer_kwargs.pop("precision", None)
+
+
 def load_model_artifacts(model_dir: str | Path) -> ModelBundle:
     """Load model artifacts from disk."""
     model_dir = Path(model_dir)
@@ -36,6 +59,9 @@ def load_model_artifacts(model_dir: str | Path) -> ModelBundle:
     try:
         import torch
 
+        map_location = None
+        if not torch.cuda.is_available():
+            map_location = torch.device("cpu")
         try:
             from torch.serialization import safe_globals
         except Exception:
@@ -65,9 +91,10 @@ def load_model_artifacts(model_dir: str | Path) -> ModelBundle:
 
         if safe_globals is not None and safe_types:
             with safe_globals(safe_types):
-                model = torch.load(model_path, weights_only=False)
+                model = torch.load(model_path, weights_only=False, map_location=map_location)
         else:
-            model = torch.load(model_path, weights_only=False)
+            model = torch.load(model_path, weights_only=False, map_location=map_location)
+        _force_cpu_neuralforecast(model, torch)
     except Exception as exc:
         if is_zip:
             raise RuntimeError(

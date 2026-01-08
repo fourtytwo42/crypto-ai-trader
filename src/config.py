@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default="postgresql://trading_user:password@localhost:5432/bitcoin_trading",
         description="PostgreSQL connection string",
     )
+    pumpfun_database_url: str | None = Field(
+        default=None,
+        description="Pump.fun PostgreSQL connection string (optional override).",
+    )
 
     # Model Storage
     model_dir: Path = Field(default=Path("models"), description="Directory for saved models")

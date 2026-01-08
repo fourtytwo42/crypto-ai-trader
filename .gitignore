@@ -96,3 +96,8 @@ wandb/
 *.db
 *.sqlite
 *.sqlite3
+
+# AI model files
+*.pt 
+*.claude
+*.cursor

@@ -33,6 +33,15 @@ from src.forecasting.walk_forward_forecast import (
 from src.forecasting.predict import build_future_timestamps, forecast_next_horizon
 from src.training.config import TrainingConfig
 from src.training.trainer import train_model
+from src.pumpfun.backtest import backtest_pumpfun_model
+from src.pumpfun.classifier import (
+    backtest_pumpfun_direction_classifier,
+    train_pumpfun_direction_classifier,
+)
+from src.pumpfun.db import get_pumpfun_db_manager
+from src.pumpfun.pipeline import PumpfunFilterConfig, sync_pumpfun_candles
+from src.pumpfun.predict import predict_pumpfun
+from src.pumpfun.training import train_pumpfun_model
 
 logger = structlog.get_logger(__name__)
 
@@ -950,3 +959,162 @@ def menu_command() -> None:
     from src.cli.menu import run_menu
 
     run_menu()
+
+
+def pumpfun_sync_command(
+    min_age_minutes: int = 60,
+    active_age_minutes: int = 240,
+    min_total_trades: int = 10,
+    min_recent_trades: int = 10,
+    recent_window_minutes: int = 30,
+    replace_existing: bool = False,
+    max_tokens: int | None = None,
+    price_lookup_enabled: bool = True,
+) -> dict[str, int]:
+    """Sync pump.fun trades into minute candles/features."""
+    config = PumpfunFilterConfig(
+        min_age_minutes=min_age_minutes,
+        active_age_minutes=active_age_minutes,
+        min_total_trades=min_total_trades,
+        min_recent_trades=min_recent_trades,
+        recent_window_minutes=recent_window_minutes,
+    )
+    db = get_pumpfun_db_manager()
+    with db.session() as session:
+        return sync_pumpfun_candles(
+            session,
+            config,
+            replace_existing=replace_existing,
+            max_tokens=max_tokens,
+            price_lookup_enabled=price_lookup_enabled,
+        )
+
+
+def pumpfun_train_command(
+    model_dir: str,
+    horizon_minutes: int = 10,
+    context_length: int = 336,
+    model_type: str = "nhits",
+    target_mode: str = "sum",
+    hidden_size: int = 512,
+    num_layers: int = 3,
+    patch_length: int = 8,
+    stride: int = 4,
+    epochs: int = 50,
+    batch_size: int = 16,
+    learning_rate: float = 5e-5,
+    holdout_count: int = 12,
+) -> dict[str, object]:
+    """Train pump.fun model on minute candles."""
+    result = train_pumpfun_model(
+        model_dir=model_dir,
+        horizon_minutes=horizon_minutes,
+        context_length=context_length,
+        model_type=model_type,
+        target_mode=target_mode,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        patch_length=patch_length,
+        stride=stride,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        holdout_count=holdout_count,
+    )
+    return {
+        "model_dir": str(result.model_dir),
+        "metrics": result.metrics,
+        "holdout_tokens": result.holdout_tokens,
+    }
+
+
+def pumpfun_backtest_command(
+    model_dir: str,
+    minutes: int = 10,
+    test_window: int = 240,
+    target_mode: str = "sum",
+    max_tokens: int | None = None,
+    max_samples: int | None = None,
+) -> dict[str, object]:
+    """Backtest pump.fun model on holdout tokens."""
+    result = backtest_pumpfun_model(
+        model_dir=model_dir,
+        minutes=minutes,
+        test_window=test_window,
+        target_mode=target_mode,
+        max_tokens=max_tokens,
+        max_samples=max_samples,
+    )
+    return {
+        "mae": result.mae,
+        "rmse": result.rmse,
+        "smape": result.smape,
+        "direction_accuracy": result.direction_accuracy,
+        "price_accuracy_pct": result.price_accuracy_pct,
+        "samples": result.samples,
+    }
+
+
+def pumpfun_predict_command(
+    token_id: str,
+    model_dir: str,
+    minutes: int = 10,
+    target_mode: str = "sum",
+) -> dict[str, object]:
+    """Predict pump.fun token price movement."""
+    result = predict_pumpfun(
+        token_id=token_id, model_dir=model_dir, minutes=minutes, target_mode=target_mode
+    )
+    return {
+        "token_id": result.token_id,
+        "current_price": result.current_price,
+        "predicted_price": result.predicted_price,
+        "price_change": result.price_change,
+        "price_change_pct": result.price_change_pct,
+        "direction": result.direction,
+        "minutes": result.minutes,
+        "confidence": result.confidence,
+    }
+
+
+def pumpfun_classify_train_command(
+    model_dir: str,
+    horizon_minutes: int = 10,
+    hidden_dim: int = 128,
+    dropout: float = 0.1,
+    num_layers: int = 2,
+    epochs: int = 20,
+    batch_size: int = 512,
+    learning_rate: float = 1e-3,
+    label_threshold: float = 0.0,
+    holdout_count: int = 12,
+) -> dict[str, object]:
+    """Train pump.fun direction classifier."""
+    result = train_pumpfun_direction_classifier(
+        model_dir=model_dir,
+        horizon_minutes=horizon_minutes,
+        hidden_dim=hidden_dim,
+        dropout=dropout,
+        num_layers=num_layers,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        label_threshold=label_threshold,
+        holdout_count=holdout_count,
+    )
+    return {
+        "model_dir": str(result.model_dir),
+        "metrics": result.metrics,
+        "holdout_tokens": result.holdout_tokens,
+    }
+
+
+def pumpfun_classify_backtest_command(
+    model_dir: str,
+    max_tokens: int | None = None,
+    max_samples: int | None = None,
+) -> dict[str, float]:
+    """Backtest pump.fun direction classifier."""
+    return backtest_pumpfun_direction_classifier(
+        model_dir=model_dir, max_tokens=max_tokens, max_samples=max_samples
+    )

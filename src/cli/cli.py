@@ -18,6 +18,12 @@ from src.cli.commands import (
     predict_command,
     quick_predict_command,
     train_command,
+    pumpfun_backtest_command,
+    pumpfun_classify_backtest_command,
+    pumpfun_classify_train_command,
+    pumpfun_predict_command,
+    pumpfun_sync_command,
+    pumpfun_train_command,
 )
 
 logger = structlog.get_logger(__name__)
@@ -509,6 +515,184 @@ def quick_predict(
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(1)
+
+
+@cli.command("pumpfun-sync")
+@click.option("--min-age-minutes", type=int, default=60)
+@click.option("--active-age-minutes", type=int, default=240)
+@click.option("--min-total-trades", type=int, default=10)
+@click.option("--min-recent-trades", type=int, default=10)
+@click.option("--recent-window-minutes", type=int, default=30)
+@click.option("--max-tokens", type=int, default=None)
+@click.option("--skip-price-lookup", is_flag=True, help="Skip SOL/USD lookup for missing USD fields")
+@click.option("--replace", is_flag=True, help="Replace existing candles/features")
+def pumpfun_sync(
+    min_age_minutes: int,
+    active_age_minutes: int,
+    min_total_trades: int,
+    min_recent_trades: int,
+    recent_window_minutes: int,
+    max_tokens: int | None,
+    skip_price_lookup: bool,
+    replace: bool,
+) -> None:
+    """Sync pump.fun trades into minute candles/features."""
+    result = pumpfun_sync_command(
+        min_age_minutes=min_age_minutes,
+        active_age_minutes=active_age_minutes,
+        min_total_trades=min_total_trades,
+        min_recent_trades=min_recent_trades,
+        recent_window_minutes=recent_window_minutes,
+        replace_existing=replace,
+        max_tokens=max_tokens,
+        price_lookup_enabled=not skip_price_lookup,
+    )
+    click.echo(
+        f"Pump.fun sync complete: tokens={result['tokens']} candles={result['candles']} features={result['features']}"
+    )
+
+
+@cli.command("pumpfun-train")
+@click.option("--model-dir", default="models_pumpfun_nhits", help="Directory to save model")
+@click.option("--horizon-minutes", type=int, default=10)
+@click.option("--context-length", type=int, default=336)
+@click.option("--model-type", type=click.Choice(["nhits", "patchtst"]), default="nhits")
+@click.option("--target-mode", type=click.Choice(["sum", "direct"]), default="sum")
+@click.option("--hidden-size", type=int, default=512)
+@click.option("--num-layers", type=int, default=3)
+@click.option("--patch-length", type=int, default=8)
+@click.option("--stride", type=int, default=4)
+@click.option("--epochs", type=int, default=50)
+@click.option("--batch-size", type=int, default=16)
+@click.option("--learning-rate", type=float, default=5e-5)
+@click.option("--holdout-count", type=int, default=12)
+def pumpfun_train(
+    model_dir: str,
+    horizon_minutes: int,
+    context_length: int,
+    model_type: str,
+    target_mode: str,
+    hidden_size: int,
+    num_layers: int,
+    patch_length: int,
+    stride: int,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    holdout_count: int,
+) -> None:
+    """Train pump.fun minute model."""
+    result = pumpfun_train_command(
+        model_dir=model_dir,
+        horizon_minutes=horizon_minutes,
+        context_length=context_length,
+        model_type=model_type,
+        target_mode=target_mode,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        patch_length=patch_length,
+        stride=stride,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        holdout_count=holdout_count,
+    )
+    click.echo(f"Pump.fun training complete. Metrics: {result['metrics']}")
+    click.echo(f"Holdout tokens saved: {len(result['holdout_tokens'])}")
+
+
+@cli.command("pumpfun-backtest")
+@click.option("--model-dir", default="models_pumpfun_nhits", help="Directory to load model")
+@click.option("--minutes", type=int, default=10)
+@click.option("--test-window", type=int, default=240)
+@click.option("--target-mode", type=click.Choice(["sum", "direct"]), default="sum")
+@click.option("--max-tokens", type=int, default=None)
+@click.option("--max-samples", type=int, default=None)
+def pumpfun_backtest(
+    model_dir: str,
+    minutes: int,
+    test_window: int,
+    target_mode: str,
+    max_tokens: int | None,
+    max_samples: int | None,
+) -> None:
+    """Backtest pump.fun model on holdout tokens."""
+    result = pumpfun_backtest_command(
+        model_dir=model_dir,
+        minutes=minutes,
+        test_window=test_window,
+        target_mode=target_mode,
+        max_tokens=max_tokens,
+        max_samples=max_samples,
+    )
+    click.echo(f"Backtest metrics: {result}")
+
+
+@cli.command("pumpfun-predict")
+@click.option("--token-id", required=True, help="Token ID to predict")
+@click.option("--model-dir", default="models_pumpfun_nhits", help="Directory to load model")
+@click.option("--minutes", type=int, default=10)
+@click.option("--target-mode", type=click.Choice(["sum", "direct"]), default="sum")
+def pumpfun_predict(token_id: str, model_dir: str, minutes: int, target_mode: str) -> None:
+    """Predict pump.fun token price movement."""
+    result = pumpfun_predict_command(
+        token_id=token_id, model_dir=model_dir, minutes=minutes, target_mode=target_mode
+    )
+    click.echo(f"Pump.fun prediction: {result}")
+
+
+@cli.command("pumpfun-classify-train")
+@click.option("--model-dir", default="models_pumpfun_classifier", help="Directory to save classifier")
+@click.option("--horizon-minutes", type=int, default=10)
+@click.option("--hidden-dim", type=int, default=128)
+@click.option("--dropout", type=float, default=0.1)
+@click.option("--num-layers", type=int, default=2)
+@click.option("--epochs", type=int, default=20)
+@click.option("--batch-size", type=int, default=512)
+@click.option("--learning-rate", type=float, default=1e-3)
+@click.option("--label-threshold", type=float, default=0.0)
+@click.option("--holdout-count", type=int, default=12)
+def pumpfun_classify_train(
+    model_dir: str,
+    horizon_minutes: int,
+    hidden_dim: int,
+    dropout: float,
+    num_layers: int,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    label_threshold: float,
+    holdout_count: int,
+) -> None:
+    """Train pump.fun direction classifier."""
+    result = pumpfun_classify_train_command(
+        model_dir=model_dir,
+        horizon_minutes=horizon_minutes,
+        hidden_dim=hidden_dim,
+        dropout=dropout,
+        num_layers=num_layers,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        label_threshold=label_threshold,
+        holdout_count=holdout_count,
+    )
+    click.echo(f"Pump.fun classifier training complete. Metrics: {result['metrics']}")
+    click.echo(f"Holdout tokens saved: {len(result['holdout_tokens'])}")
+
+
+@cli.command("pumpfun-classify-backtest")
+@click.option("--model-dir", default="models_pumpfun_classifier", help="Directory to load classifier")
+@click.option("--max-tokens", type=int, default=None)
+@click.option("--max-samples", type=int, default=None)
+def pumpfun_classify_backtest(
+    model_dir: str, max_tokens: int | None, max_samples: int | None
+) -> None:
+    """Backtest pump.fun direction classifier."""
+    result = pumpfun_classify_backtest_command(
+        model_dir=model_dir, max_tokens=max_tokens, max_samples=max_samples
+    )
+    click.echo(f"Classifier backtest metrics: {result}")
 
 
 @cli.command()

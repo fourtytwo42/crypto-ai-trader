@@ -62,6 +62,12 @@ alembic upgrade head
 python -m src.main load-hourly --symbols BTC-USDT,ETH-USDT,LTC-USDT,XRP-USDT --years-back 8
 ```
 
+## Pump.fun mint-level predictions
+
+There is a pump.fun-only flow that pulls trades, normalizes them, builds 1-minute candles/features, and runs the minute model for 5m/10m forecasts. This is isolated from the BTC/ETH/LTC/SOL pipeline.
+
+See `docs/pumpfun-process.md` for the step-by-step process and the one-off CLI snippet.
+
 ## Usage
 
 ### Quick Prediction (Recommended)

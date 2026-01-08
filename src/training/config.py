@@ -9,7 +9,7 @@ from typing import Literal
 ModelType = Literal["patchtst", "nhits"]
 
 
-DataFrequency = Literal["1day", "1hour", "4hour", "6hour", "8hour"]
+DataFrequency = Literal["1day", "1hour", "4hour", "6hour", "8hour", "1min"]
 
 
 @dataclass
@@ -90,7 +90,7 @@ class TrainingConfig:
             raise ValueError("freq must be non-empty")
         if self.max_vram_gb is not None and self.max_vram_gb <= 0:
             raise ValueError("max_vram_gb must be positive when set")
-        valid_frequencies = {"1day", "1hour", "4hour", "6hour", "8hour"}
+        valid_frequencies = {"1day", "1hour", "4hour", "6hour", "8hour", "1min"}
         if self.data_frequency not in valid_frequencies:
             raise ValueError(f"data_frequency must be one of {valid_frequencies}")
         if self.horizon_weight is not None and len(self.horizon_weight) != self.horizon:

@@ -544,6 +544,44 @@ def create_forecast_prediction(
     return prediction
 
 
+def get_forecast_prediction_by_key(
+    session: Session,
+    model_id: int,
+    symbol: str,
+    horizon_hours: int,
+    data_timestamp: datetime,
+) -> ForecastPrediction | None:
+    """Get forecast prediction by unique key."""
+    stmt = (
+        select(ForecastPrediction)
+        .where(ForecastPrediction.model_id == model_id)
+        .where(ForecastPrediction.symbol == symbol)
+        .where(ForecastPrediction.horizon_hours == horizon_hours)
+        .where(ForecastPrediction.data_timestamp == data_timestamp)
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def update_forecast_prediction(
+    session: Session,
+    prediction: ForecastPrediction,
+    predicted_at: datetime,
+    predicted_close: Decimal,
+    predicted_direction: str | None,
+    target_timestamp: datetime,
+) -> ForecastPrediction:
+    """Update a forecast prediction record with new inference output."""
+    prediction.predicted_at = predicted_at
+    prediction.predicted_close = predicted_close
+    prediction.predicted_direction = predicted_direction
+    prediction.target_timestamp = target_timestamp
+    prediction.actual_close = None
+    prediction.accuracy_pct = None
+    session.flush()
+    return prediction
+
+
 def get_cached_forecast_prediction(
     session: Session,
     model_id: int,

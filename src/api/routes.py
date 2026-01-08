@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,7 +36,6 @@ from src.database.operations import (
     get_backtest_by_id,
     get_backtests_by_model,
     get_candle_by_timestamp,
-    get_cached_forecast_prediction,
     get_forecast_predictions,
     get_latest_features,
     get_latest_prediction,
@@ -47,6 +46,8 @@ from src.database.operations import (
     get_training_job,
     list_training_jobs,
     update_forecast_prediction_actuals,
+    get_forecast_prediction_by_key,
+    update_forecast_prediction,
     update_training_job,
     create_model,
 )
@@ -495,32 +496,16 @@ async def forecast_predict(
 
     history_df = symbol_df.tail(context_length).reset_index(drop=True)
     last_timestamp = pd.to_datetime(history_df["timestamp"].iloc[-1], utc=True).to_pydatetime()
-    current_price = float(history_df["close"].iloc[-1])
+    current_price = float(candles[-1].close)
     log_close_std = 1.0
     if normalizer and "log_close" in normalizer._feature_stats:
         log_close_std = normalizer._feature_stats["log_close"].get("std", 1.0)
 
     predicted_at = datetime.now(tz=timezone.utc)
-    min_cached_at = predicted_at - timedelta(hours=1)
+    target_timestamp = build_future_timestamps(last_timestamp, request.hours)[-1]
     cache_hit = False
-
     cached = None
-    if request.use_cache:
-        cached = get_cached_forecast_prediction(
-            db,
-            model_id=model.id,
-            symbol=request.symbol,
-            horizon_hours=request.hours,
-            data_timestamp=last_timestamp,
-            min_predicted_at=min_cached_at,
-        )
-
-    if cached:
-        cache_hit = True
-        predicted_close = float(cached.predicted_close)
-        target_timestamp = cached.target_timestamp
-        predicted_at = cached.predicted_at
-    else:
+    if True:
         feature_cols = [col for col in FORECAST_FEATURES if col in history_df.columns]
         preds = forecast_next_horizon(
             bundle.model,
@@ -530,23 +515,41 @@ async def forecast_predict(
             horizon=1,
         )
         pred_return = float(preds[-1])
-        pred_log_close = float(history_df["log_close"].iloc[-1]) + (pred_return * log_close_std)
-        predicted_close = float(np.exp(pred_log_close))
+        actual_log_return = pred_return * log_close_std
+        predicted_close = float(current_price * np.exp(actual_log_return))
         target_timestamp = build_future_timestamps(last_timestamp, request.hours)[-1]
 
-        record = create_forecast_prediction(
+        predicted_direction = (
+            "UP" if predicted_close > current_price else "DOWN" if predicted_close < current_price else "FLAT"
+        )
+        existing = get_forecast_prediction_by_key(
             db,
             model_id=model.id,
             symbol=request.symbol,
             horizon_hours=request.hours,
             data_timestamp=last_timestamp,
-            target_timestamp=target_timestamp,
-            predicted_at=predicted_at,
-            predicted_close=Decimal(str(predicted_close)),
-            predicted_direction=(
-                "UP" if predicted_close > current_price else "DOWN" if predicted_close < current_price else "FLAT"
-            ),
         )
+        if existing:
+            record = update_forecast_prediction(
+                db,
+                prediction=existing,
+                predicted_at=predicted_at,
+                predicted_close=Decimal(str(predicted_close)),
+                predicted_direction=predicted_direction,
+                target_timestamp=target_timestamp,
+            )
+        else:
+            record = create_forecast_prediction(
+                db,
+                model_id=model.id,
+                symbol=request.symbol,
+                horizon_hours=request.hours,
+                data_timestamp=last_timestamp,
+                target_timestamp=target_timestamp,
+                predicted_at=predicted_at,
+                predicted_close=Decimal(str(predicted_close)),
+                predicted_direction=predicted_direction,
+            )
 
     actual_price = None
     accuracy_pct = None

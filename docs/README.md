@@ -5,3 +5,4 @@ Index
 - docs/kucoin-backfill.md
 - docs/training-workflow.md
 - docs/api.md
+- docs/pumpfun-process.md

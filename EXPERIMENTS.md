@@ -703,3 +703,232 @@ python -m src.main forecast-holdout-24h \
 ## Infra changes
 - Added max_vram_gb cap (default 23.0) to training config and applied per-process CUDA memory fraction.
 
+
+## Pump.fun minute forecasts (2026-01-07)
+
+### Sync run (1000 tokens)
+- Command: `python -m src.main pumpfun-sync --max-tokens 1000 --replace`
+- Output: tokens=1000, candles=1,259,098, features=1,203,506
+- Notes: SOL/USD cached in pump.fun DB (`pump_sol_prices`).
+
+### Baseline NHITS ctx336 (horizon 10m)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_nhits`
+- Train metrics: mae=0.02676, rmse=0.04622, mape=2.1438
+- Backtest (10m, window 240): mae=0.11794, rmse=0.17714, smape=??, direction_acc=16.81%, samples=2760
+
+### NHITS ctx240 (horizon 10m)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx240 --context-length 240`
+- Train metrics: mae=0.02482, rmse=0.04609, mape=1.7154
+- Backtest (10m, window 240): mae=0.07704, rmse=0.14493, smape=187.27, direction_acc=18.77%, samples=2760
+- Notes: Best MAE/RMSE so far on holdout.
+
+### NHITS ctx480 (horizon 10m)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx480 --context-length 480`
+- Train metrics: mae=0.01954, rmse=0.02692, mape=7.3735
+- Backtest (10m, window 240): mae=0.08560, rmse=0.15013, smape=188.88, direction_acc=17.17%, samples=2760
+- Notes: Larger context did not improve holdout MAE/RMSE vs ctx240.
+
+### NHITS ctx180 (horizon 10m)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx180 --context-length 180`
+- Train metrics: mae=0.02532, rmse=0.04640, mape=2.0644
+- Backtest (10m, window 240): mae=0.08060, rmse=0.14616, smape=187.30, direction_acc=18.84%, samples=2760
+
+### NHITS ctx300 (horizon 10m)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx300 --context-length 300`
+- Train metrics: mae=0.02661, rmse=0.04776, mape=1.8839
+- Backtest (10m, window 240): mae=0.08224, rmse=0.15282, smape=188.55, direction_acc=17.68%, samples=2760
+
+### NHITS ctx240 lr=1e-4
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx240_lr1e4 --context-length 240 --learning-rate 0.0001`
+- Train metrics: mae=0.02348, rmse=0.04526, mape=1.6138
+- Backtest (10m, window 240): mae=0.07008, rmse=0.13944, smape=187.60, direction_acc=17.75%, samples=2760
+- Notes: Best MAE/RMSE so far on 240-window holdout.
+
+### NHITS ctx240 lr=1e-4 batch=32 (timeout)
+- Command: `python -m src.main pumpfun-backtest --model-dir models_pumpfun_ctx240_lr1e4_b32 --minutes 10 --test-window 240`
+- Notes: Backtest exceeded 600s timeout twice.
+
+### PatchTST ctx240 (OOM)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_patchtst_ctx240 --model-type patchtst --context-length 240 --hidden-size 512 --num-layers 4 --patch-length 4 --stride 2`
+- Notes: Process killed (signal 9) during training.
+
+### PatchTST ctx180 (timeout, epochs 50)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_patchtst_ctx180 --model-type patchtst --context-length 180 --hidden-size 256 --num-layers 3 --patch-length 4 --stride 2`
+- Notes: Training exceeded 600s timeout.
+
+### PatchTST ctx180 epochs 10
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_patchtst_ctx180_e10 --model-type patchtst --context-length 180 --hidden-size 256 --num-layers 3 --patch-length 4 --stride 2 --epochs 10`
+- Train metrics: mae=0.01209, rmse=0.03993, mape=1.0777
+- Backtest (10m, window 120): mae=0.02269, rmse=0.06176, smape=183.48, direction_acc=19.70%, samples=1320
+- Notes: Strong MAE/RMSE on 120-window but full 240-window backtest timed out.
+
+### NHITS ctx240 lr=2e-4
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx240_lr2e4 --context-length 240 --learning-rate 0.0002`
+- Train metrics: mae=0.02252, rmse=0.04455, mape=1.6689
+- Backtest (10m, window 120): mae=0.07196, rmse=0.16194, smape=189.05, direction_acc=15.68%, samples=1320
+- Notes: 240-window backtest timed out; 120-window shows weaker direction accuracy.
+
+### NHITS ctx240 lr=5e-5
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_ctx240_lr5e5 --context-length 240 --learning-rate 0.00005`
+- Train metrics: mae=0.02482, rmse=0.04609, mape=1.7154
+- Backtest (10m, window 120): mae=0.08473, rmse=0.16877, smape=187.17, direction_acc=19.24%, samples=1320
+
+### NHITS direct target (ctx180, horizon 1)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx180_lr1e4_e30 --horizon-minutes 1 --context-length 180 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.88419, rmse=4.30364, mape=94.7351
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24913, rmse=1.09110, smape=83.29, direction_acc=61.82%, samples=440
+- Notes: Directional accuracy improves vs sum mode but still far from target.
+
+### PatchTST direct target (ctx120, horizon 1)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_patchtst_ctx120_lr2e4_e20 --horizon-minutes 1 --context-length 120 --model-type patchtst --target-mode direct --hidden-size 256 --num-layers 3 --patch-length 8 --stride 4 --epochs 20 --batch-size 32 --learning-rate 0.0002`
+- Train metrics: mae=1.64380, rmse=2.64804, mape=60.1203
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.93211, rmse=1.92817, smape=185.55, direction_acc=17.73%, samples=440
+
+### NHITS direct target (ctx60, horizon 1)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx60_lr2e4_e30 --horizon-minutes 1 --context-length 60 --model-type nhits --target-mode direct --hidden-size 128 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0002`
+- Train metrics: mae=2.91341, rmse=4.40298, mape=95.9299
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24250, rmse=1.09081, smape=82.62, direction_acc=61.82%, samples=440
+
+### NHITS direct target (ctx120, horizon 1)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx120_lr1e4_e30 --horizon-minutes 1 --context-length 120 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.92167, rmse=4.28226, mape=111.718
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24656, rmse=1.09226, smape=82.91, direction_acc=62.05%, samples=440
+
+### NHITS direct target (ctx240, horizon 1, lr=2e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx240_lr2e4_e20 --horizon-minutes 1 --context-length 240 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 20 --batch-size 32 --learning-rate 0.0002`
+- Train metrics: mae=2.92472, rmse=4.27267, mape=66.4732
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.25057, rmse=1.09296, smape=83.14, direction_acc=61.82%, samples=440
+
+### NHITS direct target (ctx90, horizon 1, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx90_lr1e4_e30 --horizon-minutes 1 --context-length 90 --model-type nhits --target-mode direct --hidden-size 128 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.91067, rmse=4.40251, mape=96.0288
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24707, rmse=1.09014, smape=83.26, direction_acc=62.05%, samples=440
+
+### NHITS direct target (ctx180, h=1, h512)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx180_h512_lr1e4_e30 --horizon-minutes 1 --context-length 180 --model-type nhits --target-mode direct --hidden-size 512 --num-layers 3 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.88419, rmse=4.30364, mape=94.7351
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24913, rmse=1.09110, smape=83.29, direction_acc=61.82%, samples=440
+
+### NHITS direct target (ctx240, h=1, h512)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx240_h512_lr1e4_e20 --horizon-minutes 1 --context-length 240 --model-type nhits --target-mode direct --hidden-size 512 --num-layers 3 --epochs 20 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.92626, rmse=4.27342, mape=66.4732
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.25306, rmse=1.09368, smape=83.83, direction_acc=61.82%, samples=440
+
+### NHITS direct target (ctx120, lr=5e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx120_lr5e4_e30 --horizon-minutes 1 --context-length 120 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0005`
+- Train metrics: mae=2.92206, rmse=4.28158, mape=111.614
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24285, rmse=1.09200, smape=82.14, direction_acc=61.82%, samples=440
+
+### NHITS direct target (ctx180, lr=5e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx180_lr5e4_e30 --horizon-minutes 1 --context-length 180 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0005`
+- Train metrics: mae=2.88587, rmse=4.30540, mape=94.7338
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24558, rmse=1.09239, smape=82.46, direction_acc=62.05%, samples=440
+
+### PatchTST direct target (ctx90, lr=2e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_patchtst_ctx90_lr2e4_e20 --horizon-minutes 1 --context-length 90 --model-type patchtst --target-mode direct --hidden-size 128 --num-layers 2 --patch-length 8 --stride 4 --epochs 20 --batch-size 32 --learning-rate 0.0002`
+- Train metrics: mae=0.99875, rmse=1.61219, mape=30.1723
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.99207, rmse=1.84272, smape=190.11, direction_acc=8.86%, samples=440
+
+### Quick backtest sanity (price accuracy)
+- Command: `python -m src.main pumpfun-backtest --model-dir models_pumpfun_direct_nhits_ctx120_lr1e4_e30 --minutes 10 --test-window 60 --target-mode direct --max-tokens 2 --max-samples 200`
+- Backtest: mae=0.26311, rmse=1.14318, smape=124.78, direction_acc=41.00%, price_accuracy_pct=75.00%, samples=100
+
+### NHITS direct target (ctx300, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx300_lr1e4_e20 --horizon-minutes 1 --context-length 300 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 20 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.87668, rmse=4.25886, mape=81.5318
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.25041, rmse=1.09127, smape=83.66, direction_acc=62.05%, price_accuracy_pct=65.02%, samples=440
+
+### NHITS direct target (ctx120, lr=2e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx120_lr2e4_e20 --horizon-minutes 1 --context-length 120 --model-type nhits --target-mode direct --hidden-size 128 --num-layers 2 --epochs 20 --batch-size 32 --learning-rate 0.0002`
+- Train metrics: mae=2.92624, rmse=4.28616, mape=111.813
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24987, rmse=1.09221, smape=83.80, direction_acc=62.05%, price_accuracy_pct=65.45%, samples=440
+
+### NHITS direct target + token meta (ctx120, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_meta_nhits_ctx120_lr1e4_e30 --horizon-minutes 1 --context-length 120 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.43489, rmse=3.81026, mape=7.8363e10
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24673, rmse=1.09234, smape=82.82, direction_acc=62.05%, price_accuracy_pct=65.45%, samples=440
+
+### NHITS direct target + token meta (ctx60, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_meta_nhits_ctx60_lr1e4_e30 --horizon-minutes 1 --context-length 60 --model-type nhits --target-mode direct --hidden-size 128 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.43176, rmse=3.80580, mape=7.8367e10
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24370, rmse=1.09136, smape=82.60, direction_acc=62.05%, price_accuracy_pct=65.15%, samples=440
+
+### NHITS direct target (ctx30, h64, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx30_h64_lr1e4_e30 --horizon-minutes 1 --context-length 30 --model-type nhits --target-mode direct --hidden-size 64 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.43357, rmse=3.80606, mape=7.8293e10
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24337, rmse=1.08899, smape=82.58, direction_acc=62.05%, price_accuracy_pct=65.48%, samples=440
+
+### NHITS direct target (ctx45, h128, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_nhits_ctx45_h128_lr1e4_e30 --horizon-minutes 1 --context-length 45 --model-type nhits --target-mode direct --hidden-size 128 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.43047, rmse=3.80221, mape=7.7899e10
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.24382, rmse=1.09098, smape=82.74, direction_acc=61.82%, price_accuracy_pct=65.40%, samples=440
+
+### PatchTST direct target (ctx60, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct_patchtst_ctx60_lr1e4_e20 --horizon-minutes 1 --context-length 60 --model-type patchtst --target-mode direct --hidden-size 128 --num-layers 2 --patch-length 8 --stride 4 --epochs 20 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=0.30718, rmse=0.81717, mape=6.8369e9
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.69564, rmse=1.46193, smape=148.39, direction_acc=39.32%, price_accuracy_pct=71.90%, samples=440
+
+### NHITS direct target (10m horizon, ctx120, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct10_nhits_ctx120_lr1e4_e30 --horizon-minutes 10 --context-length 120 --model-type nhits --target-mode direct --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.99968, rmse=4.08928, mape=2.3236e11
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.23502, rmse=1.08712, smape=81.87, direction_acc=62.05%, price_accuracy_pct=65.93%, samples=440
+
+### NHITS direct target (10m horizon, ctx60, lr=1e-4)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_direct10_nhits_ctx60_lr1e4_e30 --horizon-minutes 10 --context-length 60 --model-type nhits --target-mode direct --hidden-size 128 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=2.99404, rmse=4.08093, mape=2.3118e11
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.22681, rmse=1.08265, smape=81.42, direction_acc=61.82%, price_accuracy_pct=65.97%, samples=440
+
+### Direction classifier v1 (10m horizon)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v1 --horizon-minutes 10 --hidden-dim 128 --epochs 10 --batch-size 1024 --learning-rate 0.001`
+- Validation directional accuracy: 84.17%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.05%, samples=3964
+
+### Direction classifier v2 (wider + dropout)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v2 --horizon-minutes 10 --hidden-dim 256 --epochs 20 --batch-size 1024 --learning-rate 0.001 --dropout 0.2`
+- Validation directional accuracy: 84.13%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.05%, samples=3964
+
+### Direction classifier v3 (lower lr)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v3 --horizon-minutes 10 --hidden-dim 128 --epochs 20 --batch-size 1024 --learning-rate 0.0005 --dropout 0.1`
+- Validation directional accuracy: 84.18%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=85.90%, samples=3964
+
+### Direction classifier v4 (threshold tuned)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v4 --horizon-minutes 10 --hidden-dim 128 --epochs 10 --batch-size 1024 --learning-rate 0.001`
+- Validation directional accuracy (best threshold): 84.19%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=85.85%, samples=3964
+
+### Direction classifier v5 (log_trades feature)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v5 --horizon-minutes 10 --hidden-dim 128 --epochs 10 --batch-size 1024 --learning-rate 0.001`
+- Validation directional accuracy: 84.10%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=85.67%, samples=3964
+
+### Direction classifier v6 (ret_mean_5/ret_std_5)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v6 --horizon-minutes 10 --hidden-dim 128 --epochs 10 --batch-size 1024 --learning-rate 0.001`
+- Validation directional accuracy: 84.38%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=85.91%, samples=3952
+
+### Direction classifier (label_threshold=0.02)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_thr002 --horizon-minutes 10 --hidden-dim 128 --epochs 10 --batch-size 1024 --learning-rate 0.001 --label-threshold 0.02`
+- Validation directional accuracy: 82.15%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=83.57%, samples=3377
+
+### Direction classifier v7b (3-layer MLP)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v7b --horizon-minutes 10 --hidden-dim 128 --num-layers 3 --epochs 10 --batch-size 1024 --learning-rate 0.001 --dropout 0.1`
+- Validation directional accuracy: 84.95%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.36%, samples=3952
+
+### Direction classifier v8 (4-layer MLP, h64)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v8 --horizon-minutes 10 --hidden-dim 64 --num-layers 4 --epochs 10 --batch-size 1024 --learning-rate 0.001 --dropout 0.2`
+- Validation directional accuracy: 84.95%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.29%, samples=3952
+
+### Direction classifier v9 (3-layer MLP, longer epochs)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v9 --horizon-minutes 10 --hidden-dim 128 --num-layers 3 --epochs 20 --batch-size 2048 --learning-rate 0.001 --dropout 0.1`
+- Validation directional accuracy: 84.94%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.74%, samples=3952
+
+### Direction classifier v11 (3-layer, lr=5e-4)
+- Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v11 --horizon-minutes 10 --hidden-dim 128 --num-layers 3 --epochs 20 --batch-size 2048 --learning-rate 0.0005 --dropout 0.1`
+- Validation directional accuracy: 85.04%
+- Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.64%, samples=3952
