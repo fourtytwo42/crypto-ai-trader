@@ -20,5 +20,10 @@ def get_pumpfun_database_url() -> str:
     return url
 
 
-def get_model_dir() -> Path:
+def get_regression_models_dir() -> Path:
     return Path(__file__).resolve().parent / "models" / "regression"
+
+
+def get_model_dir() -> Path:
+    # Backwards-compatible default model directory (regression root).
+    return get_regression_models_dir()

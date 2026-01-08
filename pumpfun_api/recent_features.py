@@ -14,13 +14,20 @@ def _timestamp_to_utc(ts: int | None) -> pd.Timestamp | None:
     return pd.to_datetime(ts, unit=unit, utc=True)
 
 
-def build_recent_feature_df(candles_df: pd.DataFrame, token_meta: dict[str, object]) -> pd.DataFrame:
+def build_recent_feature_df(
+    candles_df: pd.DataFrame,
+    token_meta: dict[str, object],
+    allow_sparse: bool = False,
+) -> pd.DataFrame:
     if candles_df.empty:
         return pd.DataFrame()
     candles_df = candles_df.sort_values("timestamp").reset_index(drop=True)
-    features_df = extract_features_minute(candles_df)
+    features_df = extract_features_minute(candles_df, allow_sparse=allow_sparse)
     if features_df.empty:
         return pd.DataFrame()
+
+    for lag in range(1, 6):
+        features_df[f"return_lag_{lag}"] = features_df["return"].shift(lag)
 
     eps = 1e-10
     features_df["log_close"] = np.log(features_df["close"].clip(lower=eps))
@@ -64,5 +71,10 @@ def build_recent_feature_df(candles_df: pd.DataFrame, token_meta: dict[str, obje
     ]
     normalizer = RollingNormalizer(window=60)
     features_df = normalizer.fit_transform(features_df, normalize_cols)
+
+    if allow_sparse:
+        features_df = features_df.fillna(0.0)
+    else:
+        features_df = features_df.dropna().reset_index(drop=True)
 
     return features_df

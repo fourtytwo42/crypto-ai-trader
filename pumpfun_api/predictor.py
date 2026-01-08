@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections import OrderedDict
+import os
+import math
 import numpy as np
 
-from config import get_model_dir
+from config import get_model_dir, get_regression_models_dir
 from db import get_session
 from models import Token, TokenPrice
 from pipeline import _normalize_trades, _price_lookup_with_cache, build_minute_candles, load_trades_for_token
@@ -39,10 +42,10 @@ FEATURE_COLS = [
 class MinutePrediction:
     minutes: int
     direction: str
-    current_price: float
-    predicted_price: float
-    price_change: float
-    price_change_pct: float
+    current_price: float | None
+    predicted_price: float | None
+    price_change: float | None
+    price_change_pct: float | None
     direction_confidence: float | None
 
 
@@ -152,10 +155,6 @@ def get_candles(mint: str, limit: int = 240) -> CandleSeries:
 
 def predict_minutes(mint: str, minutes: int) -> PredictionResult:
     model_dir = get_model_dir()
-    bundle = load_model_artifacts(model_dir)
-    config_meta = bundle.metadata.get("config", {})
-    model_horizon = int(config_meta.get("horizon", 10))
-    context_length = int(config_meta.get("context_length", 336))
 
     session = get_session()
     try:
@@ -169,35 +168,94 @@ def predict_minutes(mint: str, minutes: int) -> PredictionResult:
 
     features_df = build_recent_feature_df(candles, token_meta=token_meta)
     if features_df.empty:
+        features_df = build_recent_feature_df(candles, token_meta=token_meta, allow_sparse=True)
+    if features_df.empty:
         raise ValueError("no features available")
 
-    history_df = features_df.tail(context_length).reset_index(drop=True)
-    feature_cols = [col for col in FEATURE_COLS if col in history_df.columns and col != "return"]
-
-    direction_confidence, classifier_direction = predict_direction_confidence(history_df)
-
-    preds = forecast_next_horizon(
-        bundle.model,
-        history_df,
-        target_col="return",
-        feature_cols=feature_cols,
-        horizon=model_horizon,
-    )
-    preds = np.asarray(preds, dtype=float)
-    if minutes > model_horizon and preds.size:
-        extension = float(np.mean(preds[-3:])) if preds.size >= 3 else float(preds[-1])
-        extra = np.full(minutes - model_horizon, extension, dtype=float)
-        preds = np.concatenate([preds, extra])
+    direction_confidence, classifier_direction = predict_direction_confidence(features_df)
     current_price = float(candles["close"].iloc[-1])
+    if not math.isfinite(current_price):
+        current_price = None
 
-    max_minutes = min(minutes, preds.size)
+    max_minutes = max(1, minutes)
+    horizon_cap = 20
+    horizons_needed = sorted({min(m, horizon_cap) for m in range(1, max_minutes + 1)})
+    horizon_predictions: dict[int, float] = {}
+
+    def _load_bundle_for_horizon(horizon: int) -> tuple[Path, object, int, int, list[str], object]:
+        reg_root = get_regression_models_dir()
+        model_path = reg_root / f"h{horizon:02d}"
+        if not model_path.exists():
+            model_path = model_dir
+        bundle = _get_cached_bundle(model_path)
+        config_meta = bundle.metadata.get("config", {})
+        model_horizon = int(config_meta.get("horizon", horizon))
+        context_length = int(config_meta.get("context_length", 336))
+        history_df = features_df.tail(context_length).reset_index(drop=True)
+        feature_cols = [col for col in FEATURE_COLS if col in history_df.columns and col != "return"]
+        return model_path, bundle, model_horizon, context_length, feature_cols, history_df
+
+    def _predict_for_horizon(horizon: int) -> float:
+        _model_path, bundle, model_horizon, _context_length, feature_cols, history_df = _load_bundle_for_horizon(
+            horizon
+        )
+        preds = forecast_next_horizon(
+            bundle.model,
+            history_df,
+            target_col="return",
+            feature_cols=feature_cols,
+            horizon=model_horizon,
+        )
+        preds = np.asarray(preds, dtype=float)
+        return float(np.sum(preds[:model_horizon]))
+
+    def _prefetch_horizons(horizons: list[int]) -> None:
+        if not horizons:
+            return
+        reg_root = get_regression_models_dir()
+        for horizon in horizons:
+            model_path = reg_root / f"h{horizon:02d}"
+            if not model_path.exists():
+                model_path = model_dir
+            _get_cached_bundle(model_path)
+
+    use_parallel = os.getenv("PUMPFUN_PARALLEL_INFER", "0") == "1"
+    first_batch = [h for h in horizons_needed if h <= 10]
+    second_batch = [h for h in horizons_needed if h > 10]
+    _prefetch_horizons(first_batch)
+
+    if use_parallel and len(horizons_needed) > 1:
+        import concurrent.futures
+
+        max_workers = int(os.getenv("PUMPFUN_PARALLEL_WORKERS", "4"))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_predict_for_horizon, h): h for h in horizons_needed}
+            for future in concurrent.futures.as_completed(futures):
+                horizon_predictions[futures[future]] = float(future.result())
+    else:
+        for horizon in first_batch:
+            horizon_predictions[horizon] = _predict_for_horizon(horizon)
+        if second_batch:
+            _prefetch_horizons(second_batch)
+            for horizon in second_batch:
+                horizon_predictions[horizon] = _predict_for_horizon(horizon)
+
     results: list[MinutePrediction] = []
     for m in range(1, max_minutes + 1):
-        pred_return = float(np.sum(preds[:m]))
-        predicted_price = float(current_price * np.exp(pred_return))
-        price_change = predicted_price - current_price
-        price_change_pct = (price_change / current_price) * 100 if current_price else 0.0
-        direction = "UP" if price_change > 0 else "DOWN" if price_change < 0 else "FLAT"
+        horizon = min(m, horizon_cap)
+        pred_return = horizon_predictions.get(horizon, 0.0)
+        predicted_price = None
+        price_change = None
+        price_change_pct = None
+        direction = "FLAT"
+        if current_price is not None and math.isfinite(pred_return):
+            predicted_price = float(current_price * np.exp(pred_return))
+            if math.isfinite(predicted_price):
+                price_change = predicted_price - current_price
+                if math.isfinite(price_change) and current_price:
+                    price_change_pct = (price_change / current_price) * 100
+                if price_change is not None:
+                    direction = "UP" if price_change > 0 else "DOWN" if price_change < 0 else "FLAT"
         results.append(
             MinutePrediction(
                 minutes=m,
@@ -217,3 +275,20 @@ def predict_minutes(mint: str, minutes: int) -> PredictionResult:
         horizon=max_minutes,
         predictions=results,
     )
+
+
+_MODEL_CACHE: "OrderedDict[str, ModelBundle]" = OrderedDict()
+
+
+def _get_cached_bundle(model_dir: Path) -> ModelBundle:
+    key = str(model_dir.resolve())
+    if key in _MODEL_CACHE:
+        bundle = _MODEL_CACHE.pop(key)
+        _MODEL_CACHE[key] = bundle
+        return bundle
+    bundle = load_model_artifacts(model_dir)
+    _MODEL_CACHE[key] = bundle
+    max_cache = int(os.getenv("PUMPFUN_MODEL_CACHE_SIZE", "10"))
+    while len(_MODEL_CACHE) > max_cache:
+        _MODEL_CACHE.popitem(last=False)
+    return bundle

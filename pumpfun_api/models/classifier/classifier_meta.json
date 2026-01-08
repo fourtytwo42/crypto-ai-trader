@@ -18,12 +18,18 @@
     "log_trades",
     "log_close",
     "log_volume",
-    "return"
+    "return",
+    "return_lag_1",
+    "return_lag_2",
+    "return_lag_3",
+    "return_lag_4",
+    "return_lag_5"
   ],
-  "input_dim": 18,
+  "input_dim": 23,
   "hidden_dim": 128,
   "dropout": 0.1,
-  "num_layers": 3,
+  "num_layers": 2,
   "label_threshold": 0.0,
-  "threshold": 0.5599999999999999
+  "threshold": 0.525,
+  "min_token_samples": 300
 }

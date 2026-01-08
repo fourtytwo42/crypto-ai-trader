@@ -652,6 +652,9 @@ def pumpfun_predict(token_id: str, model_dir: str, minutes: int, target_mode: st
 @click.option("--learning-rate", type=float, default=1e-3)
 @click.option("--label-threshold", type=float, default=0.0)
 @click.option("--holdout-count", type=int, default=12)
+@click.option("--min-token-samples", type=int, default=0)
+@click.option("--no-pos-weight", is_flag=True, help="Disable positive class weighting")
+@click.option("--no-normalize", is_flag=True, help="Disable feature normalization")
 def pumpfun_classify_train(
     model_dir: str,
     horizon_minutes: int,
@@ -663,6 +666,9 @@ def pumpfun_classify_train(
     learning_rate: float,
     label_threshold: float,
     holdout_count: int,
+    min_token_samples: int,
+    no_pos_weight: bool,
+    no_normalize: bool,
 ) -> None:
     """Train pump.fun direction classifier."""
     result = pumpfun_classify_train_command(
@@ -676,6 +682,9 @@ def pumpfun_classify_train(
         learning_rate=learning_rate,
         label_threshold=label_threshold,
         holdout_count=holdout_count,
+        min_token_samples=min_token_samples,
+        use_pos_weight=not no_pos_weight,
+        normalize_features=not no_normalize,
     )
     click.echo(f"Pump.fun classifier training complete. Metrics: {result['metrics']}")
     click.echo(f"Holdout tokens saved: {len(result['holdout_tokens'])}")

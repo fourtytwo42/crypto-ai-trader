@@ -1088,6 +1088,9 @@ def pumpfun_classify_train_command(
     learning_rate: float = 1e-3,
     label_threshold: float = 0.0,
     holdout_count: int = 12,
+    min_token_samples: int = 0,
+    use_pos_weight: bool = True,
+    normalize_features: bool = True,
 ) -> dict[str, object]:
     """Train pump.fun direction classifier."""
     result = train_pumpfun_direction_classifier(
@@ -1101,6 +1104,9 @@ def pumpfun_classify_train_command(
         learning_rate=learning_rate,
         label_threshold=label_threshold,
         holdout_count=holdout_count,
+        min_token_samples=min_token_samples,
+        use_pos_weight=use_pos_weight,
+        normalize_features=normalize_features,
     )
     return {
         "model_dir": str(result.model_dir),
