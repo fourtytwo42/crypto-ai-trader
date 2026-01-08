@@ -79,7 +79,16 @@ for minutes in (5, 10):
 PY
 ```
 
+### API surface (pumpfun_api)
+
+The self-contained FastAPI service exposes:
+
+- `GET /predict?mint=...&minutes=1..60` for minute projections (minutes > 10 are extrapolated from the last predicted returns).
+- `GET /token?mint=...` for token metadata + latest price/market cap.
+- `GET /candles?mint=...&limit=...` for minute candles used by the UI.
+
 ### Notes
 
 - This uses the pump.fun regression model (NHITS). Directional classification lives in a separate classifier pipeline.
 - Candles/features are derived from trades on demand, so this path always uses the latest trade stream.
+- The pump.fun frontend uses price or market cap views; market cap assumes a 1B token supply.

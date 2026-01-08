@@ -602,7 +602,7 @@ def pumpfun_train(
 
 
 @cli.command("pumpfun-backtest")
-@click.option("--model-dir", default="models_pumpfun_nhits", help="Directory to load model")
+@click.option("--model-dir", default="models_pumpfun_sum10_ctx240_lr1e4_e30", help="Directory to load model")
 @click.option("--minutes", type=int, default=10)
 @click.option("--test-window", type=int, default=240)
 @click.option("--target-mode", type=click.Choice(["sum", "direct"]), default="sum")
@@ -630,7 +630,7 @@ def pumpfun_backtest(
 
 @cli.command("pumpfun-predict")
 @click.option("--token-id", required=True, help="Token ID to predict")
-@click.option("--model-dir", default="models_pumpfun_nhits", help="Directory to load model")
+@click.option("--model-dir", default="models_pumpfun_sum10_ctx240_lr1e4_e30", help="Directory to load model")
 @click.option("--minutes", type=int, default=10)
 @click.option("--target-mode", type=click.Choice(["sum", "direct"]), default="sum")
 def pumpfun_predict(token_id: str, model_dir: str, minutes: int, target_mode: str) -> None:
@@ -642,7 +642,7 @@ def pumpfun_predict(token_id: str, model_dir: str, minutes: int, target_mode: st
 
 
 @cli.command("pumpfun-classify-train")
-@click.option("--model-dir", default="models_pumpfun_classifier", help="Directory to save classifier")
+@click.option("--model-dir", default="models_pumpfun_classifier_v9", help="Directory to save classifier")
 @click.option("--horizon-minutes", type=int, default=10)
 @click.option("--hidden-dim", type=int, default=128)
 @click.option("--dropout", type=float, default=0.1)
@@ -682,7 +682,7 @@ def pumpfun_classify_train(
 
 
 @cli.command("pumpfun-classify-backtest")
-@click.option("--model-dir", default="models_pumpfun_classifier", help="Directory to load classifier")
+@click.option("--model-dir", default="models_pumpfun_classifier_v9", help="Directory to load classifier")
 @click.option("--max-tokens", type=int, default=None)
 @click.option("--max-samples", type=int, default=None)
 def pumpfun_classify_backtest(

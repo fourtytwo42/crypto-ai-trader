@@ -17,6 +17,8 @@ yarn.lock
 dist/
 build/
 *.tsbuildinfo
+.next/
+out/
 
 # IDE and editor files
 .vscode/
@@ -42,6 +44,8 @@ pids/
 # Coverage directory used by tools like istanbul
 coverage/
 *.lcov
+playwright-report/
+test-results/
 
 # nyc test coverage
 .nyc_output/

@@ -932,3 +932,8 @@ python -m src.main forecast-holdout-24h \
 - Command: `python -m src.main pumpfun-classify-train --model-dir models_pumpfun_classifier_v11 --horizon-minutes 10 --hidden-dim 128 --num-layers 3 --epochs 20 --batch-size 2048 --learning-rate 0.0005 --dropout 0.1`
 - Validation directional accuracy: 85.04%
 - Backtest (holdout, max tokens 4, max samples 5000): directional_accuracy=86.64%, samples=3952
+
+### NHITS sum target (10m horizon, ctx240)
+- Command: `python -m src.main pumpfun-train --model-dir models_pumpfun_sum10_ctx240_lr1e4_e30 --horizon-minutes 10 --context-length 240 --model-type nhits --target-mode sum --hidden-size 256 --num-layers 2 --epochs 30 --batch-size 32 --learning-rate 0.0001`
+- Train metrics: mae=0.01827, rmse=0.02501, mape=2.1346
+- Backtest (10m, window 120, max tokens 4, max samples 1500): mae=0.04553, rmse=0.07909, smape=194.43, direction_acc=5.68%, price_accuracy_pct=95.50%, samples=440

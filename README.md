@@ -68,6 +68,27 @@ There is a pump.fun-only flow that pulls trades, normalizes them, builds 1-minut
 
 See `docs/pumpfun-process.md` for the step-by-step process and the one-off CLI snippet.
 
+### Pump.fun API + Frontend
+
+- `pumpfun_api/` exposes a self-contained FastAPI service with `/predict`, `/token`, and `/candles`.
+- `pumpfun_frontend/` is a Next.js UI that calls the API and visualizes minute candles plus projections.
+
+Quick run:
+
+```bash
+# API
+cd pumpfun_api
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m uvicorn app:app --host 0.0.0.0 --port 8081
+
+# Frontend (different terminal)
+cd pumpfun_frontend
+npm install
+npm run dev  # runs on http://127.0.0.1:3001
+```
+
 ## Usage
 
 ### Quick Prediction (Recommended)

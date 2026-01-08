@@ -6,3 +6,4 @@ Index
 - docs/training-workflow.md
 - docs/api.md
 - docs/pumpfun-process.md
+- pumpfun_api/README.md
