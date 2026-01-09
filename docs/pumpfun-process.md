@@ -1,6 +1,6 @@
 ## Pump.fun prediction process (ad-hoc by mint)
 
-This is the exact workflow used to generate 5m/10m forecasts from the pump.fun trade stream without touching the BTC/ETH/LTC/SOL pipeline.
+This is the exact workflow used to generate 5m/10m forecasts from the pump.fun trade stream in this branch.
 
 ### Data flow
 
@@ -21,16 +21,21 @@ This is the exact workflow used to generate 5m/10m forecasts from the pump.fun t
 from pathlib import Path
 import numpy as np
 
-from src.pumpfun.db import get_pumpfun_db_manager
-from src.pumpfun.models import PumpToken
-from src.pumpfun.pipeline import _load_trades_for_token, _normalize_trades, _price_lookup_with_cache, build_minute_candles
-from src.pumpfun.recent_features import build_recent_feature_df
-from src.pumpfun.data import PUMPFUN_FEATURE_COLUMNS
-from src.prediction.model_loader import load_model_artifacts
-from src.forecasting.predict import forecast_next_horizon
+from pumpfun_train.db import get_pumpfun_db_manager
+from pumpfun_train.models import PumpToken
+from pumpfun_train.pipeline import (
+    _load_trades_for_token,
+    _normalize_trades,
+    _price_lookup_with_cache,
+    build_minute_candles,
+)
+from pumpfun_train.recent_features import build_recent_feature_df
+from pumpfun_train.data import PUMPFUN_FEATURE_COLUMNS
+from pumpfun_train.model_loader import load_model_artifacts
+from pumpfun_train.forecast import forecast_next_horizon
 
 mint = "YOUR_MINT_ADDRESS"
-model_dir = Path("models_pumpfun_ctx240_lr1e4")
+model_dir = Path("pumpfun_train/models/regression/h10")
 
 bundle = load_model_artifacts(model_dir)
 config_meta = bundle.metadata.get("config", {})
@@ -57,7 +62,11 @@ with db.session() as session:
 candles = build_minute_candles(normalized)
 features_df, _ = build_recent_feature_df(candles, token_meta=token_meta)
 history_df = features_df.tail(context_length).reset_index(drop=True)
-feature_cols = [col for col in [*PUMPFUN_FEATURE_COLUMNS, "log_close", "log_volume"] if col in history_df.columns]
+feature_cols = [
+    col
+    for col in [*PUMPFUN_FEATURE_COLUMNS, "log_close", "log_volume"]
+    if col in history_df.columns
+]
 
 preds = forecast_next_horizon(
     bundle.model,

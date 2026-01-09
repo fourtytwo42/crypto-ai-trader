@@ -247,14 +247,14 @@ def predict_minutes(mint: str, minutes: int) -> PredictionResult:
         predicted_price = None
         price_change = None
         price_change_pct = None
-        direction = "FLAT"
+        direction = classifier_direction or "FLAT"
         if current_price is not None and math.isfinite(pred_return):
             predicted_price = float(current_price * np.exp(pred_return))
             if math.isfinite(predicted_price):
                 price_change = predicted_price - current_price
                 if math.isfinite(price_change) and current_price:
                     price_change_pct = (price_change / current_price) * 100
-                if price_change is not None:
+                if classifier_direction is None and price_change is not None:
                     direction = "UP" if price_change > 0 else "DOWN" if price_change < 0 else "FLAT"
         results.append(
             MinutePrediction(

@@ -22,11 +22,11 @@ classifiers = [
 ]
 
 [project.scripts]
-btm = "src.main:main"
+pumpfun = "pumpfun_train.cli_main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["pumpfun_train*", "pumpfun_api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

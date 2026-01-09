@@ -93,11 +93,23 @@ def predict_direction_confidence(features_df) -> tuple[float | None, str | None]
     if bundle is None:
         return None, None
 
-    feature_cols = [col for col in bundle.feature_cols if col in features_df.columns]
+    feature_cols = list(bundle.feature_cols)
     if not feature_cols:
         return None, None
 
-    last_row = features_df.tail(1)[feature_cols].to_numpy(dtype=np.float32)
+    input_dim = len(feature_cols)
+    try:
+        input_dim = int(bundle.model.net[0].in_features)
+    except Exception:
+        pass
+    last_row = np.zeros((1, input_dim), dtype=np.float32)
+    last_features = features_df.tail(1)
+    # Fill missing feature columns with 0 to match classifier input shape.
+    for idx, col in enumerate(feature_cols[:input_dim]):
+        if col in last_features.columns:
+            value = float(last_features[col].iloc[0])
+            if np.isfinite(value):
+                last_row[0, idx] = value
     with torch.no_grad():
         logits = bundle.model(torch.from_numpy(last_row))
         prob_up = torch.sigmoid(logits).item()

@@ -25,6 +25,7 @@ click==8.1.7
 
 # Terminal UI
 rich==13.7.0
+tqdm==4.66.1
 
 # Logging
 structlog==24.1.0

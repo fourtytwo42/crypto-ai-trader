@@ -41,6 +41,31 @@ def load_model_artifacts(model_dir: str | Path) -> ModelBundle:
     metadata = json.loads(metadata_path.read_text())
 
     import torch
+    import sys
+    import types
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    try:
+        import pumpfun_train  # noqa: F401
+    except Exception:
+        # Best-effort import for pickle compatibility.
+        pass
+    try:
+        import structlog  # noqa: F401
+    except Exception:
+        # Provide a minimal stub for structlog during unpickling.
+        stub = types.ModuleType("structlog")
+        class _DummyLogger:
+            def __getattr__(self, _name):
+                def _noop(*_args, **_kwargs):
+                    return None
+                return _noop
+        def _get_logger(*_args, **_kwargs):
+            return _DummyLogger()
+        stub.get_logger = _get_logger  # type: ignore[attr-defined]
+        sys.modules["structlog"] = stub
 
     map_location = None
     if not torch.cuda.is_available():
