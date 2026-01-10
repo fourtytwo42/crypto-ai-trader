@@ -147,23 +147,26 @@ def backtest_pumpfun_model(
     if df.empty:
         raise ValueError("No holdout data available for backtest")
 
+    target_col = "return"
     if target_mode == "direct":
         df = add_return_target(df, minutes)
-    df = df.dropna().reset_index(drop=True)
+        target_col = "return_horizon"
+    feature_cols = [col for col in [*PUMPFUN_FEATURE_COLUMNS, "log_close", "log_volume"] if col in df.columns]
+    drop_cols = [target_col, *feature_cols]
+    df = df.dropna(subset=drop_cols).reset_index(drop=True)
 
     preds_all = []
     actual_all = []
     dir_hits = []
     price_acc = []
 
-    feature_cols = [col for col in [*PUMPFUN_FEATURE_COLUMNS, "log_close", "log_volume"] if col in df.columns]
-
     # Group by token once
     token_groups = list(df.groupby("token_id"))
     
     # Parallel backtesting using ThreadPoolExecutor
     import os
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
     from threading import Lock
     
     try:
@@ -172,7 +175,9 @@ def backtest_pumpfun_model(
         tqdm = lambda x, **kwargs: x
     
     # Determine number of workers (use threads for I/O-bound model predictions)
-    max_workers = min(os.cpu_count() or 4, len(token_groups), 8)  # Cap at 8 to avoid memory issues
+    # Reduce workers for large models to prevent memory issues
+    # Models are ~695MB each, so limit concurrent workers
+    max_workers = min(os.cpu_count() or 4, len(token_groups), 4)  # Cap at 4 to avoid memory issues with large models
     
     # Shared results list with lock for thread safety
     results_lock = Lock()
@@ -274,7 +279,7 @@ def backtest_pumpfun_model(
         # Dummy progress bar that does nothing (for nested contexts)
         class DummyPbar:
             def update(self, n=1): pass
-            def set_postfix(self, **kwargs): pass
+            def set_postfix(self, *args, **kwargs): pass
             def close(self): pass
         token_pbar = DummyPbar()
     
@@ -286,44 +291,77 @@ def backtest_pumpfun_model(
             for args in worker_args
         }
         
-        # Process completed tasks
-        for future in as_completed(future_to_token):
-            try:
-                token_id, token_preds, token_actuals, token_dir_hits, token_price_acc, token_samples, was_skipped = future.result()
-                
-                with results_lock:
-                    if was_skipped:
-                        tokens_skipped += 1
-                    else:
-                        tokens_processed += 1
-                        preds_all.extend(token_preds)
-                        actual_all.extend(token_actuals)
-                        dir_hits.extend(token_dir_hits)
-                        price_acc.extend(token_price_acc)
-                
-                # Update progress bar
-                token_pbar.update(1)
-                token_pbar.set_postfix({
-                    "samples": len(preds_all),
-                    "processed": tokens_processed,
-                    "skipped": tokens_skipped
-                })
-            except Exception as e:
-                # Log error but continue processing
-                with results_lock:
-                    tokens_skipped += 1
-                    current_samples = len(preds_all)
-                    current_processed = tokens_processed
-                    current_skipped = tokens_skipped
-                
-                if token_pbar is not None:
+        # Process completed tasks with timeout (60 seconds per token to prevent hangs)
+        timeout_per_token = 60.0  # 60 seconds max per token
+        total_timeout = timeout_per_token * len(worker_args)  # Total timeout for all tokens
+        
+        try:
+            for future in as_completed(future_to_token, timeout=total_timeout):
+                try:
+                    # Get result with timeout
+                    token_id, token_preds, token_actuals, token_dir_hits, token_price_acc, token_samples, was_skipped = future.result(timeout=timeout_per_token)
+                    
+                    with results_lock:
+                        if was_skipped:
+                            tokens_skipped += 1
+                        else:
+                            tokens_processed += 1
+                            preds_all.extend(token_preds)
+                            actual_all.extend(token_actuals)
+                            dir_hits.extend(token_dir_hits)
+                            price_acc.extend(token_price_acc)
+                    
+                    # Update progress bar
                     token_pbar.update(1)
                     token_pbar.set_postfix({
-                        "samples": current_samples,
-                        "processed": current_processed,
-                        "skipped": current_skipped,
-                        "error": str(e)[:20]
+                        "samples": len(preds_all),
+                        "processed": tokens_processed,
+                        "skipped": tokens_skipped
                     })
+                except FutureTimeoutError:
+                    # Token processing timed out
+                    token_id = future_to_token.get(future, "unknown")
+                    _status_write(f"⚠ Token {token_id} timed out after {timeout_per_token}s, skipping...")
+                    with results_lock:
+                        tokens_skipped += 1
+                        current_samples = len(preds_all)
+                        current_processed = tokens_processed
+                        current_skipped = tokens_skipped
+                    
+                    if token_pbar is not None:
+                        token_pbar.update(1)
+                        token_pbar.set_postfix({
+                            "samples": current_samples,
+                            "processed": current_processed,
+                            "skipped": current_skipped,
+                            "timeout": "yes"
+                        })
+                except Exception as e:
+                    # Log error but continue processing
+                    token_id = future_to_token.get(future, "unknown")
+                    _status_write(f"⚠ Error processing token {token_id}: {str(e)[:100]}")
+                    with results_lock:
+                        tokens_skipped += 1
+                        current_samples = len(preds_all)
+                        current_processed = tokens_processed
+                        current_skipped = tokens_skipped
+                    
+                    if token_pbar is not None:
+                        token_pbar.update(1)
+                        token_pbar.set_postfix({
+                            "samples": current_samples,
+                            "processed": current_processed,
+                            "skipped": current_skipped,
+                            "error": str(e)[:20]
+                        })
+        except (FutureTimeoutError, TimeoutError):
+            # Overall timeout - cancel remaining futures
+            _status_write(f"⚠ Overall timeout after {total_timeout}s. Cancelling remaining tasks...")
+            for future in future_to_token:
+                if not future.done():
+                    future.cancel()
+            _status_write(f"⚠ Processed {tokens_processed} tokens, skipped {tokens_skipped} tokens before timeout")
+            # Continue with whatever results we have rather than raising
     
     if token_pbar is not None:
         token_pbar.close()
@@ -336,6 +374,12 @@ def backtest_pumpfun_model(
             f"skipped {tokens_skipped} tokens (insufficient data: need {context_length + minutes} rows). "
             f"Total tokens in test set: {len(df.groupby('token_id'))}"
         )
+
+    valid_mask = np.isfinite(preds_arr) & np.isfinite(actual_arr)
+    preds_arr = preds_arr[valid_mask]
+    actual_arr = actual_arr[valid_mask]
+    if preds_arr.size == 0:
+        raise ValueError("No finite backtest samples after filtering NaNs.")
 
     mae = float(np.mean(np.abs(preds_arr - actual_arr)))
     rmse = float(np.sqrt(np.mean((preds_arr - actual_arr) ** 2)))

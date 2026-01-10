@@ -109,14 +109,14 @@ for horizon in {1..20}; do
   python -m pumpfun_train.cli.cli pumpfun-train \
     --model-dir pumpfun_train/models/regression/h$h \
     --horizon-minutes $horizon \
-    --context-length 240 \
+    --context-length 336 \
     --model-type nhits \
     --target-mode sum \
-    --hidden-size 256 \
-    --num-layers 2 \
-    --epochs 30 \
-    --batch-size 32 \
-    --learning-rate 1e-4
+    --hidden-size 512 \
+    --num-layers 3 \
+    --epochs 50 \
+    --batch-size 16 \
+    --learning-rate 5e-5
 done
 ```
 
@@ -244,4 +244,3 @@ After training, evaluate your models to assess performance. See the comprehensiv
 This comprehensive test script evaluates all regression models and provides detailed metrics including direction accuracy, price accuracy, MAE, RMSE, and SMAPE.
 
 **See [docs/model-evaluation.md](../docs/model-evaluation.md) for complete evaluation guide.**
-

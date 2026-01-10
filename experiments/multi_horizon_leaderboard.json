@@ -1,0 +1,14 @@
+[
+  {
+    "exp_id": "exp-065",
+    "model_dir": "experiments/models/exp-065-nhits-sum20-ctx336-large",
+    "min_price_accuracy": 72.3917282803619,
+    "avg_price_accuracy": 85.78538127434656
+  },
+  {
+    "exp_id": "exp-064",
+    "model_dir": "experiments/models/exp-064-nhits-sum20-ctx240-small",
+    "min_price_accuracy": 69.26268385273114,
+    "avg_price_accuracy": 84.36536403132008
+  }
+]

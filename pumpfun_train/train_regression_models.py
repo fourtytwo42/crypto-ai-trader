@@ -81,15 +81,20 @@ def main() -> None:
             result = pumpfun_train_command(
                 model_dir=str(horizon_dir),
                 horizon_minutes=horizon,
-                context_length=240,
+                context_length=336,  # Best directional + price config (production NHITS)
                 model_type="nhits",
                 target_mode="sum",
-                hidden_size=256,
-                num_layers=2,
-                epochs=30,
-                batch_size=32,
-                learning_rate=1e-4,
+                hidden_size=512,
+                num_layers=3,
+                epochs=50,
+                batch_size=16,
+                learning_rate=5e-5,
                 holdout_count=12,
+                nhits_stack_types=["identity", "identity", "identity"],
+                nhits_n_blocks=[3, 2, 2],
+                nhits_mlp_units=[[768, 768], [768, 768], [768, 768]],
+                nhits_n_pool_kernel_size=[2, 2, 1],
+                nhits_n_freq_downsample=[4, 2, 1],
             )
             elapsed = time.time() - start_time
             mae = result['metrics'].get('mae', 0)
@@ -146,4 +151,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

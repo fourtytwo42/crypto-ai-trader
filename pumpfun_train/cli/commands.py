@@ -72,6 +72,11 @@ def pumpfun_train_command(
     batch_size: int = 16,
     learning_rate: float = 5e-5,
     holdout_count: int = 12,
+    nhits_stack_types: list[str] | None = None,
+    nhits_n_blocks: list[int] | None = None,
+    nhits_mlp_units: list[list[int]] | None = None,
+    nhits_n_pool_kernel_size: list[int] | None = None,
+    nhits_n_freq_downsample: list[int] | None = None,
 ) -> dict[str, object]:
     """Train pump.fun model on minute candles."""
     result = train_pumpfun_model(
@@ -88,6 +93,11 @@ def pumpfun_train_command(
         batch_size=batch_size,
         learning_rate=learning_rate,
         holdout_count=holdout_count,
+        nhits_stack_types=nhits_stack_types,
+        nhits_n_blocks=nhits_n_blocks,
+        nhits_mlp_units=nhits_mlp_units,
+        nhits_n_pool_kernel_size=nhits_n_pool_kernel_size,
+        nhits_n_freq_downsample=nhits_n_freq_downsample,
     )
     return {
         "model_dir": str(result.model_dir),

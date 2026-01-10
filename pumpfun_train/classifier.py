@@ -17,7 +17,11 @@ from sqlalchemy import select, func
 from pumpfun_train.data import PUMPFUN_FEATURE_COLUMNS, add_return_target, prepare_pumpfun_training_data
 from pumpfun_train.db import get_pumpfun_db_manager
 from pumpfun_train.models import PumpCandle1m
-from pumpfun_train.training import select_holdout_tokens
+from pumpfun_train.training import (
+    balance_tokens_by_bucket,
+    select_holdout_tokens_stratified,
+    select_tokens_by_market_cap,
+)
 
 
 CLASSIFIER_FEATURE_COLUMNS = [
@@ -224,20 +228,22 @@ def train_pumpfun_direction_classifier(
     device = get_train_device()
     db = get_pumpfun_db_manager()
 
+    min_rows = max(min_token_samples, 0)
     with db.session() as session:
-        tokens = session.execute(
-            select(PumpCandle1m.token_id, func.count(PumpCandle1m.token_id))
-            .group_by(PumpCandle1m.token_id)
-        ).all()
-    token_ids = [
-        token_id for (token_id, count) in tokens if count >= max(min_token_samples, 0)
-    ]
+        bucketed_tokens = select_tokens_by_market_cap(session, min_rows)
 
-    if not token_ids:
+    if not any(bucketed_tokens.values()):
         raise ValueError("No pump.fun tokens available for classifier training")
 
-    holdout_tokens = select_holdout_tokens(sorted(token_ids), holdout_count)
-    train_tokens = [token for token in token_ids if token not in holdout_tokens]
+    holdout_tokens = select_holdout_tokens_stratified(bucketed_tokens, holdout_count)
+    holdout_set = set(holdout_tokens)
+    train_bucketed = {
+        bucket: [token for token in tokens if token not in holdout_set]
+        for bucket, tokens in bucketed_tokens.items()
+    }
+    train_tokens = balance_tokens_by_bucket(train_bucketed)
+    if not train_tokens:
+        raise ValueError("No pump.fun tokens available after market cap filtering")
 
     print(f"Preparing training data from {len(train_tokens)} tokens...")
     if max_samples is not None:

@@ -21,16 +21,37 @@
     "horizon_weight": null,
     "loss_type": "huber",
     "data_frequency": "1min",
-    "nhits_stack_types": null,
-    "nhits_n_blocks": null,
-    "nhits_mlp_units": null,
-    "nhits_n_pool_kernel_size": null,
-    "nhits_n_freq_downsample": null
+    "nhits_stack_types": [
+      "identity",
+      "identity"
+    ],
+    "nhits_n_blocks": [
+      1,
+      1
+    ],
+    "nhits_mlp_units": [
+      [
+        128,
+        128
+      ],
+      [
+        128,
+        128
+      ]
+    ],
+    "nhits_n_pool_kernel_size": [
+      2,
+      1
+    ],
+    "nhits_n_freq_downsample": [
+      169,
+      1
+    ]
   },
   "metrics": {
-    "mae": 0.028633141233539203,
-    "rmse": 0.061589613759289966,
-    "mape": 7.243030703972248
+    "mae": 0.035668519530492326,
+    "rmse": 0.06551306965321926,
+    "mape": 6.490904814258914
   },
   "scaler_path": null
 }

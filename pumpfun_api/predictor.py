@@ -5,6 +5,7 @@ from pathlib import Path
 from collections import OrderedDict
 import os
 import math
+import gc
 import numpy as np
 
 from config import get_model_dir, get_regression_models_dir
@@ -268,27 +269,55 @@ def predict_minutes(mint: str, minutes: int) -> PredictionResult:
             )
         )
 
-    return PredictionResult(
+    result = PredictionResult(
         mint=mint,
         token_id=token_id,
         model_dir=str(model_dir),
         horizon=max_minutes,
         predictions=results,
     )
+    
+    # Clear model cache and force garbage collection to free memory after prediction
+    # This ensures models are unloaded immediately after use
+    global _MODEL_CACHE
+    _MODEL_CACHE.clear()
+    gc.collect()
+    
+    return result
 
 
 _MODEL_CACHE: "OrderedDict[str, ModelBundle]" = OrderedDict()
 
 
+def clear_model_cache() -> None:
+    """Clear the model cache to free memory."""
+    global _MODEL_CACHE
+    _MODEL_CACHE.clear()
+    gc.collect()
+
+
+def unload_model(model_dir: Path) -> None:
+    """Unload a specific model from cache to free memory."""
+    global _MODEL_CACHE
+    key = str(model_dir.resolve())
+    if key in _MODEL_CACHE:
+        del _MODEL_CACHE[key]
+        gc.collect()
+
+
 def _get_cached_bundle(model_dir: Path) -> ModelBundle:
+    """Get model bundle from cache or load it. Cache size is limited to prevent memory issues."""
     key = str(model_dir.resolve())
     if key in _MODEL_CACHE:
         bundle = _MODEL_CACHE.pop(key)
         _MODEL_CACHE[key] = bundle
         return bundle
+    # Clear cache before loading new model if cache is full (only keep 1 model)
+    max_cache = int(os.getenv("PUMPFUN_MODEL_CACHE_SIZE", "1"))
+    if len(_MODEL_CACHE) >= max_cache:
+        # Clear all cached models before loading new one to free memory
+        _MODEL_CACHE.clear()
+        gc.collect()
     bundle = load_model_artifacts(model_dir)
     _MODEL_CACHE[key] = bundle
-    max_cache = int(os.getenv("PUMPFUN_MODEL_CACHE_SIZE", "10"))
-    while len(_MODEL_CACHE) > max_cache:
-        _MODEL_CACHE.popitem(last=False)
     return bundle

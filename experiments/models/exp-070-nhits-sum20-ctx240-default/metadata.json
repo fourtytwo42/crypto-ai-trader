@@ -2,7 +2,7 @@
   "config": {
     "model_type": "nhits",
     "context_length": 240,
-    "horizon": 9,
+    "horizon": 20,
     "hidden_size": 256,
     "num_layers": 2,
     "patch_length": 8,
@@ -23,35 +23,43 @@
     "data_frequency": "1min",
     "nhits_stack_types": [
       "identity",
+      "identity",
       "identity"
     ],
     "nhits_n_blocks": [
-      1,
-      1
+      3,
+      2,
+      2
     ],
     "nhits_mlp_units": [
       [
-        128,
-        128
+        768,
+        768
       ],
       [
-        128,
-        128
+        768,
+        768
+      ],
+      [
+        768,
+        768
       ]
     ],
     "nhits_n_pool_kernel_size": [
       2,
+      2,
       1
     ],
     "nhits_n_freq_downsample": [
-      169,
+      4,
+      2,
       1
     ]
   },
   "metrics": {
-    "mae": 0.03389474411614528,
-    "rmse": 0.07552589801468719,
-    "mape": 5.261802868574011
+    "mae": 0.03125904385838585,
+    "rmse": 0.054714751266592976,
+    "mape": 4.15916219504097
   },
   "scaler_path": null
 }

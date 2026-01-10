@@ -54,14 +54,14 @@ for horizon in {1..20}; do
   python -m pumpfun_train.cli_main pumpfun-train \
     --model-dir "$horizon_dir" \
     --horizon-minutes $horizon \
-    --context-length 240 \
+    --context-length 336 \
     --model-type nhits \
     --target-mode sum \
-    --hidden-size 256 \
-    --num-layers 2 \
-    --epochs 30 \
-    --batch-size 32 \
-    --learning-rate 1e-4 \
+    --hidden-size 512 \
+    --num-layers 3 \
+    --epochs 50 \
+    --batch-size 16 \
+    --learning-rate 5e-5 \
     --holdout-count 12
   
   echo "✓ [$horizon/20] ${horizon}-minute model complete"
@@ -98,4 +98,3 @@ echo "✓ Classifier copied"
 
 echo ""
 echo "All done! Models are ready for the API."
-

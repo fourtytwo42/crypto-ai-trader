@@ -14,6 +14,18 @@ from pumpfun_train.config import TrainingConfig
 from pumpfun_train.trainer import train_model
 
 
+TOKEN_SUPPLY = 1_000_000_000
+MIN_MARKET_CAP_USD = 10_000.0
+CAP_BUCKETS = [
+    ("10k-100k", 1e4, 1e5),
+    ("100k-1m", 1e5, 1e6),
+    ("1m-10m", 1e6, 1e7),
+    ("10m-100m", 1e7, 1e8),
+    ("100m+", 1e8, float("inf")),
+]
+MAX_BUCKET_RATIO = 3
+
+
 @dataclass
 class PumpfunTrainingResult:
     model_dir: Path
@@ -37,6 +49,96 @@ def select_holdout_tokens(token_ids: list[str], holdout_count: int) -> list[str]
     return token_ids[-holdout_count:]
 
 
+def _cap_bucket(market_cap: float) -> str | None:
+    if market_cap < MIN_MARKET_CAP_USD:
+        return None
+    for label, lower, upper in CAP_BUCKETS:
+        if lower <= market_cap < upper:
+            return label
+    return CAP_BUCKETS[-1][0]
+
+
+def select_tokens_by_market_cap(session, min_rows: int) -> dict[str, list[str]]:
+    rows = (
+        session.query(
+            PumpCandle1m.token_id,
+            func.count(PumpCandle1m.id).label("count"),
+            func.max(PumpCandle1m.close).label("max_close"),
+        )
+        .group_by(PumpCandle1m.token_id)
+        .having(func.count(PumpCandle1m.id) >= min_rows)
+        .all()
+    )
+    bucketed: dict[str, list[str]] = {label: [] for label, _, _ in CAP_BUCKETS}
+    for token_id, _count, max_close in rows:
+        if max_close is None:
+            continue
+        market_cap = float(max_close) * TOKEN_SUPPLY
+        bucket = _cap_bucket(market_cap)
+        if bucket is None:
+            continue
+        bucketed[bucket].append(token_id)
+    for bucket in bucketed:
+        bucketed[bucket] = sorted(bucketed[bucket])
+    return bucketed
+
+
+def select_holdout_tokens_stratified(
+    bucketed_tokens: dict[str, list[str]],
+    holdout_count: int,
+) -> list[str]:
+    if holdout_count <= 0:
+        return []
+    bucket_order = [label for label, _, _ in CAP_BUCKETS]
+    available = [b for b in bucket_order if bucketed_tokens.get(b)]
+    if not available:
+        return []
+
+    allocations: dict[str, int] = {b: 0 for b in available}
+    if holdout_count >= len(available):
+        for b in available:
+            allocations[b] = 1
+        remaining = holdout_count - len(available)
+    else:
+        by_size = sorted(available, key=lambda b: len(bucketed_tokens[b]), reverse=True)
+        for b in by_size[:holdout_count]:
+            allocations[b] = 1
+        remaining = 0
+
+    by_size = sorted(available, key=lambda b: len(bucketed_tokens[b]), reverse=True)
+    while remaining > 0:
+        for b in by_size:
+            if remaining <= 0:
+                break
+            allocations[b] += 1
+            remaining -= 1
+
+    holdout_tokens: list[str] = []
+    for b in available:
+        tokens = bucketed_tokens[b]
+        take = min(allocations[b], len(tokens))
+        if take > 0:
+            holdout_tokens.extend(tokens[-take:])
+    return holdout_tokens
+
+
+def balance_tokens_by_bucket(bucketed_tokens: dict[str, list[str]]) -> list[str]:
+    bucket_order = [label for label, _, _ in CAP_BUCKETS]
+    bucketed = {b: list(bucketed_tokens.get(b, [])) for b in bucket_order}
+    sizes = [len(tokens) for tokens in bucketed.values() if tokens]
+    if not sizes:
+        return []
+    min_count = min(sizes)
+    max_per_bucket = max(1, min_count * MAX_BUCKET_RATIO)
+    balanced: list[str] = []
+    for b in bucket_order:
+        tokens = bucketed[b]
+        if not tokens:
+            continue
+        balanced.extend(tokens[: min(len(tokens), max_per_bucket)])
+    return balanced
+
+
 def train_pumpfun_model(
     model_dir: str | Path,
     horizon_minutes: int = 10,
@@ -51,19 +153,43 @@ def train_pumpfun_model(
     batch_size: int = 16,
     learning_rate: float = 5e-5,
     holdout_count: int = 12,
+    nhits_stack_types: list[str] | None = None,
+    nhits_n_blocks: list[int] | None = None,
+    nhits_mlp_units: list[list[int]] | None = None,
+    nhits_n_pool_kernel_size: list[int] | None = None,
+    nhits_n_freq_downsample: list[int] | None = None,
 ) -> PumpfunTrainingResult:
+    if model_type == "nhits":
+        # Best directional + price config from EXPERIMENTS.md (production NHITS 3/2/2).
+        if nhits_stack_types is None:
+            nhits_stack_types = ["identity", "identity", "identity"]
+        if nhits_n_blocks is None:
+            nhits_n_blocks = [3, 2, 2]
+        if nhits_mlp_units is None:
+            nhits_mlp_units = [[768, 768], [768, 768], [768, 768]]
+        if nhits_n_pool_kernel_size is None:
+            nhits_n_pool_kernel_size = [2, 2, 1]
+        if nhits_n_freq_downsample is None:
+            nhits_n_freq_downsample = [4, 2, 1]
     # Device config handled by get_train_device()
     db = get_pumpfun_db_manager()
 
     with db.session() as session:
         min_rows = context_length + horizon_minutes + 30
-        token_ids = _select_tokens(session, min_rows)
+        bucketed_tokens = select_tokens_by_market_cap(session, min_rows)
 
-    if not token_ids:
+    if not any(bucketed_tokens.values()):
         raise ValueError("No pump.fun tokens available for training")
 
-    holdout_tokens = select_holdout_tokens(sorted(token_ids), holdout_count)
-    train_tokens = [token for token in token_ids if token not in holdout_tokens]
+    holdout_tokens = select_holdout_tokens_stratified(bucketed_tokens, holdout_count)
+    holdout_set = set(holdout_tokens)
+    train_bucketed = {
+        bucket: [token for token in tokens if token not in holdout_set]
+        for bucket, tokens in bucketed_tokens.items()
+    }
+    train_tokens = balance_tokens_by_bucket(train_bucketed)
+    if not train_tokens:
+        raise ValueError("No pump.fun tokens available after market cap filtering")
 
     from pumpfun_train.training_cache import get_cached_or_prepare
 
@@ -107,6 +233,11 @@ def train_pumpfun_model(
         epochs=epochs,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        nhits_stack_types=nhits_stack_types,
+        nhits_n_blocks=nhits_n_blocks,
+        nhits_mlp_units=nhits_mlp_units,
+        nhits_n_pool_kernel_size=nhits_n_pool_kernel_size,
+        nhits_n_freq_downsample=nhits_n_freq_downsample,
         freq="T",
     )
 

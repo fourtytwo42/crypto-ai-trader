@@ -7,12 +7,10 @@ used for final evaluation to ensure models haven't overfit to holdout tokens.
 from __future__ import annotations
 
 from pathlib import Path
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pumpfun_train.db import get_pumpfun_db_manager
-from pumpfun_train.models import PumpCandle1m
-from pumpfun_train.training import _select_tokens, select_holdout_tokens
+from pumpfun_train.training import select_holdout_tokens_stratified, select_tokens_by_market_cap
 
 
 RESERVE_TOKEN_FILE = Path(__file__).parent / "reserve_tokens.txt"
@@ -35,8 +33,7 @@ def select_reserve_tokens(
     Returns:
         List of token IDs selected as reserve tokens
     """
-    # Get all qualified tokens
-    all_qualified = _select_tokens(session, min_rows)
+    bucketed_tokens = select_tokens_by_market_cap(session, min_rows)
     
     if exclude_training:
         # Get tokens that were used in ANY training (from any model)
@@ -47,6 +44,7 @@ def select_reserve_tokens(
         model_patterns = [
             str(base_dir / "models" / "regression" / "h*/holdout_tokens.txt"),
             str(base_dir / "models" / "classifier" / "holdout_tokens.txt"),
+            str(base_dir.parent / "experiments" / "models" / "**" / "holdout_tokens.txt"),
         ]
         
         for pattern in model_patterns:
@@ -57,46 +55,16 @@ def select_reserve_tokens(
                     ]
                     training_tokens.update(holdout_tokens)
         
-        # Get ALL tokens that meet min_rows requirement
-        all_tokens_stmt = (
-            session.query(PumpCandle1m.token_id, func.count(PumpCandle1m.id).label('count'))
-            .group_by(PumpCandle1m.token_id)
-            .having(func.count(PumpCandle1m.id) >= min_rows)
-        ).all()
-        
-        all_token_ids = [t[0] for t in all_tokens_stmt]
-        all_token_counts = {t[0]: t[1] for t in all_tokens_stmt}
-        
         # Select tokens that are qualified but NOT in training/holdout sets
-        reserve_candidates = [
-            (token_id, all_token_counts[token_id])
-            for token_id in all_token_ids
-            if token_id not in training_tokens
-        ]
-        
-        # Sort by count descending (prefer tokens with more data)
-        reserve_candidates.sort(key=lambda x: x[1], reverse=True)
-        
-        # Take the top reserve_count tokens
-        if len(reserve_candidates) >= reserve_count:
-            return [token_id for token_id, _ in reserve_candidates[:reserve_count]]
-        else:
-            # Not enough reserve candidates - use what we have
-            return [token_id for token_id, _ in reserve_candidates]
+        filtered_bucketed = {
+            bucket: [token_id for token_id in tokens if token_id not in training_tokens]
+            for bucket, tokens in bucketed_tokens.items()
+        }
+        reserve_tokens = select_holdout_tokens_stratified(filtered_bucketed, reserve_count)
+        return reserve_tokens
     else:
         # Don't exclude training tokens - just select from qualified pool
-        # This would select tokens that could have been in training but weren't
-        sorted_tokens = sorted(all_qualified)
-        # Take tokens from a different part of the sorted list (e.g., middle section)
-        # to ensure they're different from holdout tokens (which are last N)
-        if len(sorted_tokens) > reserve_count:
-            # Take from the middle section (between training and holdout)
-            start_idx = len(sorted_tokens) // 3
-            end_idx = start_idx + reserve_count
-            if end_idx > len(sorted_tokens):
-                end_idx = len(sorted_tokens)
-            return sorted_tokens[start_idx:end_idx]
-        return sorted_tokens[:reserve_count]
+        return select_holdout_tokens_stratified(bucketed_tokens, reserve_count)
 
 
 def get_reserve_tokens() -> list[str]:
@@ -140,4 +108,3 @@ def refresh_reserve_tokens(reserve_count: int = 50) -> list[str]:
     invalidate_reserve_cache()
     
     return reserve_tokens
-

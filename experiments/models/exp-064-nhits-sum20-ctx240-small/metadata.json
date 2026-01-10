@@ -2,7 +2,7 @@
   "config": {
     "model_type": "nhits",
     "context_length": 240,
-    "horizon": 9,
+    "horizon": 20,
     "hidden_size": 256,
     "num_layers": 2,
     "patch_length": 8,
@@ -49,9 +49,9 @@
     ]
   },
   "metrics": {
-    "mae": 0.03389474411614528,
-    "rmse": 0.07552589801468719,
-    "mape": 5.261802868574011
+    "mae": 0.03137890543444455,
+    "rmse": 0.05441017757594761,
+    "mape": 3.6055276727496834
   },
   "scaler_path": null
 }
